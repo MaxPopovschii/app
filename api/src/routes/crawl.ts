@@ -15,13 +15,25 @@ const limiter = rateLimit({
 
 router.use(limiter);
 
-// Controlla se l'URL è valido
-function isValidUrl(urlString: string): boolean {
+// Controlla se l'URL è valido e normalizza
+function validateAndNormalizeUrl(urlString: string): { valid: boolean; normalized?: string; error?: string } {
   try {
     const url = new URL(urlString);
-    return url.protocol === 'http:' || url.protocol === 'https:';
+    
+    // Verifica schema consentito
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return { valid: false, error: 'unsupported_scheme' };
+    }
+    
+    // Normalizza: rimuove hash/fragment
+    url.hash = '';
+    
+    // Converte hostname in punycode se necessario (già fatto automaticamente da URL)
+    const normalized = url.toString();
+    
+    return { valid: true, normalized };
   } catch {
-    return false;
+    return { valid: false, error: 'invalid_url' };
   }
 }
 
@@ -29,14 +41,21 @@ function isValidUrl(urlString: string): boolean {
 router.post('/', async (req: Request, res: Response) => {
   const { url } = req.body;
   
-  if (!url || !isValidUrl(url)) {
-    return res.status(400).json({ error: 'URL non valido' });
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'invalid_url' });
   }
   
+  const validation = validateAndNormalizeUrl(url);
+  if (!validation.valid) {
+    return res.status(400).json({ error: validation.error });
+  }
+  
+  const normalizedUrl = validation.normalized!;
+  
   try {
-    // Controlla se stiamo già analizzando questo URL
+    // Controlla se stiamo già analizzando questo URL (usa URL normalizzato)
     const existing = await Page.findOne({
-      url,
+      url: normalizedUrl,
       status: 'pending',
       createdAt: { $gte: new Date(Date.now() - 5 * 60 * 1000) }
     });
@@ -50,14 +69,14 @@ router.post('/', async (req: Request, res: Response) => {
     
     await Page.create({
       uid,
-      url,
+      url: normalizedUrl,
       status: 'pending',
       createdAt: new Date(),
       updatedAt: new Date()
     });
     
     // Invia al worker
-    await publishCrawlRequest({ uid, url, requestedAt: new Date().toISOString() });
+    await publishCrawlRequest({ uid, url: normalizedUrl, requestedAt: new Date().toISOString() });
     
     res.status(202).json({ uid });
   } catch (error) {

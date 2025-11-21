@@ -31,6 +31,9 @@ export async function processCrawl(uid: string, url: string): Promise<void> {
       const page = await context.newPage();
       page.setDefaultTimeout(30000);
       
+      const viewport = { w: 1920, h: 1080 };
+      const userAgent = 'Mozilla/5.0 (compatible; WebAnalyzer/1.0)';
+      
       try {
         // Vai alla pagina
         try {
@@ -45,14 +48,19 @@ export async function processCrawl(uid: string, url: string): Promise<void> {
         // Analizza con AI
         const description = await analyzeScreenshot(screenshot);
         
-        // Salva risultato
+        // Salva risultato con meta
         await Page.updateOne({ uid }, {
           status: 'done',
           description,
           image: screenshot,
           url: page.url(),
           tookMs: Date.now() - start,
-          updatedAt: new Date()
+          updatedAt: new Date(),
+          meta: {
+            viewport,
+            userAgent,
+            timestamp: new Date()
+          }
         });
       } catch (error: any) {
         let msg = error.message || 'Errore sconosciuto';

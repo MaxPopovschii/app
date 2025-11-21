@@ -13,6 +13,7 @@ export interface IPage extends Document {
   meta?: {
     viewport: { w: number; h: number };
     userAgent: string;
+    timestamp?: Date;
   };
 }
 
@@ -44,7 +45,8 @@ const PageSchema = new Schema<IPage>(
         w: Number,
         h: Number
       },
-      userAgent: String
+      userAgent: String,
+      timestamp: Date
     }
   },
   {
