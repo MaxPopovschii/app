@@ -14,15 +14,13 @@ export async function connectRabbit() {
     connection = await amqp.connect(RABBIT_URL);
     channel = await connection.createChannel();
     
-    // Setup exchange
     await channel.assertExchange(EXCHANGE, 'direct', { durable: true });
     
-    // Setup dead letter exchange
+    // setup DLX
     await channel.assertExchange(DLX_EXCHANGE, 'direct', { durable: true });
     await channel.assertQueue(DLX_QUEUE, { durable: true });
     await channel.bindQueue(DLX_QUEUE, DLX_EXCHANGE, DLX_QUEUE);
     
-    // Setup main queue with DLX
     await channel.assertQueue(QUEUE, {
       durable: true,
       arguments: {
@@ -52,9 +50,5 @@ export async function publishCrawlRequest(message: { uid: string; url: string; r
 }
 
 export async function checkRabbitHealth(): Promise<boolean> {
-  try {
-    return !!(connection && channel);
-  } catch {
-    return false;
-  }
+  return !!(connection && channel);
 }

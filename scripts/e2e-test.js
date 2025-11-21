@@ -51,7 +51,7 @@ async function submitCrawl(url) {
   return data.uid;
 }
 
-async function pollCrawlStatus(uid, maxAttempts = 30) {
+async function pollCrawlStatus(uid, maxAttempts = 60) {
   console.log(`Polling status for UID: ${uid}`);
   
   for (let i = 0; i < maxAttempts; i++) {

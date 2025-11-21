@@ -5,9 +5,8 @@ export async function checkRobotsTxt(url: string): Promise<boolean> {
     const urlObj = new URL(url);
     const robotsUrl = `${urlObj.protocol}//${urlObj.host}/robots.txt`;
     
-    // Fetch robots.txt
     const response = await fetch(robotsUrl, {
-      signal: AbortSignal.timeout(5000)
+      signal: AbortSignal.timeout(20000)
     });
     
     if (!response.ok) {

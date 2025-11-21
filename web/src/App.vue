@@ -88,23 +88,24 @@ const isUrlValid = computed(() => {
   return url.value && !validationError.value;
 });
 
-const loadingMessages = [
-  'Sto catturando lo screenshot del sito...',
-  'L\'intelligenza artificiale sta analizzando il design...',
-  'Esamino layout, colori e tipografia...',
-  'Quasi fatto, sto preparando i risultati...',
-  'Ultimi ritocchi all\'analisi...'
-];
-
 function getLoadingMessage() {
-  const index = Math.min(Math.floor(pollingAttempts.value / 5), loadingMessages.length - 1);
-  return loadingMessages[index];
+  if (pollingAttempts.value < 5) return 'Sto catturando lo screenshot del sito...';
+  if (pollingAttempts.value < 10) return 'L\'intelligenza artificiale sta analizzando il design...';
+  if (pollingAttempts.value < 15) return 'Esamino layout, colori e tipografia...';
+  if (pollingAttempts.value < 20) return 'Quasi fatto, sto preparando i risultati...';
+  return 'Ultimi ritocchi all\'analisi...';
 }
 
 function getErrorMessage(msg: string) {
-  if (msg.includes('robots')) return 'Questo sito non permette l\'analisi automatica (robots.txt)';
-  if (msg.includes('timeout')) return 'Il sito ci ha messo troppo a rispondere. Riprova!';
-  if (msg.includes('auth')) return 'Questo sito richiede autenticazione';
+  if (msg.includes('robots')) {
+    return 'Questo sito non permette l\'analisi automatica (robots.txt)';
+  }
+  if (msg.includes('timeout')) {
+    return 'Il sito ci ha messo troppo a rispondere. Riprova!';
+  }
+  if (msg.includes('auth')) {
+    return 'Questo sito richiede autenticazione';
+  }
   return `Errore: ${msg}`;
 }
 
@@ -160,9 +161,9 @@ async function submitCrawl() {
 
 async function pollCrawlStatus(uid: string) {
   let attempts = 0;
-  const maxAttempts = 30; // 30 seconds max with exponential backoff
-  let delay = 2000; // Start with 2 seconds
-  const maxDelay = 30000; // Max 30 seconds
+  const maxAttempts = 30;
+  let delay = 2000;
+  const maxDelay = 30000;
   
   while (attempts < maxAttempts) {
     try {
@@ -177,7 +178,6 @@ async function pollCrawlStatus(uid: string) {
         return;
       }
       
-      // Exponential backoff
       await new Promise(resolve => setTimeout(resolve, delay));
       delay = Math.min(delay * 1.5, maxDelay);
       attempts++;
@@ -188,7 +188,6 @@ async function pollCrawlStatus(uid: string) {
     }
   }
   
-  // Timeout
   result.value = {
     status: 'error',
     message: 'timeout'

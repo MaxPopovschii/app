@@ -6,14 +6,12 @@ import { publishCrawlRequest } from '../queue';
 
 const router = Router();
 
-// Limite: massimo 10 richieste al minuto
+// Limite: massimo 10 richieste al minuto (solo per POST)
 const limiter = rateLimit({
   windowMs: 60 * 1000,
   max: 10,
   message: { error: 'Troppi tentativi, aspetta un minuto!' }
 });
-
-router.use(limiter);
 
 // Controlla se l'URL è valido e normalizza
 function validateAndNormalizeUrl(urlString: string): { valid: boolean; normalized?: string; error?: string } {
@@ -38,7 +36,7 @@ function validateAndNormalizeUrl(urlString: string): { valid: boolean; normalize
 }
 
 // Richiesta di analisi di un sito
-router.post('/', async (req: Request, res: Response) => {
+router.post('/', limiter, async (req: Request, res: Response) => {
   const { url } = req.body;
   
   if (!url || typeof url !== 'string') {
