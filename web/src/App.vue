@@ -44,10 +44,7 @@
           class="screenshot"
         />
         
-        <div class="description">
-          <strong>Cosa abbiamo scoperto:</strong><br />
-          {{ result.result.description }}
-        </div>
+        <div class="description" v-html="formatDescription(result.result.description)"></div>
         
         <p class="meta">Analisi completata in {{ (result.result.tookMs / 1000).toFixed(1) }} secondi</p>
         
@@ -202,5 +199,16 @@ function reset() {
   loading.value = false;
   result.value = null;
   pollingAttempts.value = 0;
+}
+
+function formatDescription(text: string): string {
+  // Converte **Titolo** in <strong>
+  let formatted = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  
+  // Aggiunge spazi tra le sezioni
+  formatted = formatted.replace(/\n\n/g, '<br><br>');
+  formatted = formatted.replace(/\n/g, '<br>');
+  
+  return formatted;
 }
 </script>

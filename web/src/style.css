@@ -162,10 +162,22 @@ input[type="url"].invalid {
   background: #f5f5f7;
   padding: 20px;
   border-radius: 12px;
-  line-height: 1.47059;
+  line-height: 1.6;
   color: #1d1d1f;
   margin-bottom: 20px;
   font-size: 17px;
+}
+
+.description strong {
+  color: #0071e3;
+  display: block;
+  margin-top: 16px;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.description strong:first-child {
+  margin-top: 0;
 }
 
 .meta {

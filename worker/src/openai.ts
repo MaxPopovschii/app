@@ -2,14 +2,29 @@ import OpenAI from 'openai';
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
-const PROMPT = `Analizza questo sito web come se fossi un designer esperto. Descrivi in modo semplice e colloquiale:
-- Come è organizzato il layout
-- Quali colori usa e che sensazione danno
-- Come sono disposti i testi e le immagini
-- Quanto è facile da navigare
-- Cosa funziona bene e cosa potrebbe essere migliorato
+const PROMPT = `Analizza questo sito web e descrivi gli aspetti del design in modo chiaro e organizzato.
 
-Scrivi in modo naturale, come se stessi parlando con un amico che vuole capire il design del sito.`;
+Struttura la tua risposta con questi punti:
+
+**Layout**
+Come è organizzata la pagina (griglia, sezioni, struttura)
+
+**Colori**
+Palette principale e sensazione che trasmette
+
+**Tipografia**
+Font, dimensioni, gerarchia dei testi
+
+**Navigazione**
+Quanto è intuitivo muoversi nel sito
+
+**Punti di forza**
+2-3 elementi che funzionano bene
+
+**Miglioramenti possibili**
+1-2 aspetti che potrebbero essere ottimizzati
+
+Sii conciso e professionale.`;
 
 export async function analyzeScreenshot(screenshot: Buffer): Promise<string> {
   if (!openai) {
