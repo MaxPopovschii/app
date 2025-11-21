@@ -1,0 +1,18 @@
+{
+  "name": "mini-crawler",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "api",
+    "web",
+    "worker"
+  ],
+  "scripts": {
+    "build-frontend": "cd web && yarn install && yarn build && rm -rf ../api/public && cp -r dist ../api/public",
+    "build-all": "yarn build-frontend && cd api && yarn install && yarn build && cd ../worker && yarn install && yarn build",
+    "test:e2e": "node scripts/e2e-test.js"
+  },
+  "devDependencies": {
+    "node-fetch": "^3.3.2"
+  }
+}

@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  mongo:
+    image: mongo:7
+    container_name: crawler-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbit:
+    image: rabbitmq:3-management
+    container_name: crawler-rabbit
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: crawler-api
+    ports:
+      - "8080:8080"
+    environment:
+      - MONGO_URI=${MONGO_URI}
+      - RABBIT_URL=${RABBIT_URL}
+      - PORT=${PORT}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MOCK=${OPENAI_MOCK}
+    depends_on:
+      mongo:
+        condition: service_healthy
+      rabbit:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: crawler-worker
+    environment:
+      - MONGO_URI=${MONGO_URI}
+      - RABBIT_URL=${RABBIT_URL}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MOCK=${OPENAI_MOCK}
+    depends_on:
+      mongo:
+        condition: service_healthy
+      rabbit:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  mongo-data:

@@ -1,0 +1,15 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Copy API files
+COPY api/package.json api/yarn.lock ./
+RUN yarn install --production
+
+# Copy built API and public folder
+COPY api/dist ./dist
+COPY api/public ./public
+
+EXPOSE 8080
+
+CMD ["node", "dist/index.js"]
