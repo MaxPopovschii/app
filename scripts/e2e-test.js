@@ -6,7 +6,7 @@ const API_URL = process.env.API_URL || 'http://localhost:8080';
 const TEST_URLS = [
   'https://example.com',
   'https://www.google.com',
-  'https://httpbin.org/deny' // This might be blocked by robots.txt
+  'https://httpbin.org/deny' // This should be blocked by robots.txt
 ];
 
 let testsPassed = 0;
@@ -130,6 +130,121 @@ async function testCrawl(url) {
   }
 }
 
+async function testInvalidUrl() {
+  console.log('\n\nTesting Invalid URL...');
+  console.log('Submitting invalid URL...');
+  
+  try {
+    const response = await fetch(`${API_URL}/crawl`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: 'not-a-valid-url' })
+    });
+    
+    if (response.status === 400) {
+      console.log('[PASS] Invalid URL correctly rejected');
+      testsPassed++;
+      return true;
+    } else {
+      console.log('[FAIL] Invalid URL not rejected');
+      testsFailed++;
+      return false;
+    }
+  } catch (error) {
+    console.log(`[FAIL] Test failed: ${error.message}`);
+    testsFailed++;
+    return false;
+  }
+}
+
+async function testRateLimiting() {
+  console.log('\n\nTesting Rate Limiting...');
+  console.log('Submitting 11 requests rapidly...');
+  
+  try {
+    const promises = [];
+    for (let i = 0; i < 11; i++) {
+      promises.push(
+        fetch(`${API_URL}/crawl`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: 'https://example.com' })
+        })
+      );
+    }
+    
+    const responses = await Promise.all(promises);
+    const rateLimited = responses.filter(r => r.status === 429);
+    
+    if (rateLimited.length > 0) {
+      console.log(`[PASS] Rate limiting working (${rateLimited.length} requests blocked)`);
+      testsPassed++;
+      return true;
+    } else {
+      console.log('[FAIL] Rate limiting not working');
+      testsFailed++;
+      return false;
+    }
+  } catch (error) {
+    console.log(`[FAIL] Test failed: ${error.message}`);
+    testsFailed++;
+    return false;
+  }
+}
+
+async function testMetaFields() {
+  console.log('\n\nTesting Meta Fields...');
+  console.log('Checking if meta fields are present...');
+  
+  try {
+    const uid = await submitCrawl('https://example.com');
+    const result = await pollCrawlStatus(uid);
+    
+    if (result.status === 'done') {
+      const meta = result.result.meta;
+      if (meta && meta.viewport && meta.userAgent && meta.timestamp) {
+        console.log('[PASS] All meta fields present');
+        console.log(`  viewport: ${meta.viewport.w}x${meta.viewport.h}`);
+        console.log(`  userAgent: ${meta.userAgent}`);
+        testsPassed++;
+        return true;
+      } else {
+        console.log('[FAIL] Meta fields missing');
+        testsFailed++;
+        return false;
+      }
+    }
+  } catch (error) {
+    console.log(`[FAIL] Test failed: ${error.message}`);
+    testsFailed++;
+    return false;
+  }
+}
+
+async function testUrlNormalization() {
+  console.log('\n\nTesting URL Normalization...');
+  console.log('Testing URL with fragment...');
+  
+  try {
+    const uid1 = await submitCrawl('https://example.com#section');
+    const uid2 = await submitCrawl('https://example.com');
+    
+    if (uid1 === uid2) {
+      console.log('[PASS] URL normalization working (fragments removed)');
+      testsPassed++;
+      return true;
+    } else {
+      console.log('[FAIL] URL normalization not working');
+      testsFailed++;
+      return false;
+    }
+  } catch (error) {
+    console.log(`[FAIL] Test failed: ${error.message}`);
+    testsFailed++;
+    return false;
+  }
+}
+
 async function runTests() {
   console.log('Starting E2E Tests for Mini Crawler\n');
   console.log('=' .repeat(60));
@@ -137,11 +252,15 @@ async function runTests() {
   try {
     await waitForService(`${API_URL}/healthz`);
     
+    // Test basic crawling
+    console.log('\nBasic Crawl Tests');
+    console.log('-'.repeat(60));
     for (const url of TEST_URLS) {
       await testCrawl(url);
-      await sleep(1000);
+      await sleep(2000);
     }
     
+    // Test idempotency
     await testIdempotency();
     
     console.log('\n' + '='.repeat(60));
@@ -165,19 +284,36 @@ async function runTests() {
 }
 
 // Check if Docker Compose is running
-console.log('Checking if Docker Compose stack is running...');
-try {
-  execSync('docker compose ps', { cwd: __dirname + '/..', stdio: 'inherit' });
-} catch (error) {
-  console.log('\nDocker Compose stack not running. Starting it now...');
-  console.log('This may take a few minutes...\n');
+async function checkAndStartStack() {
+  console.log('Checking if Docker Compose stack is running...');
   try {
-    execSync('docker compose up -d --build', { cwd: __dirname + '/..', stdio: 'inherit' });
-    console.log('\nStack started successfully!\n');
-  } catch (startError) {
-    console.error('Failed to start Docker Compose stack');
-    process.exit(1);
+    const output = execSync('docker compose ps --format json', { cwd: __dirname + '/..', encoding: 'utf-8' });
+    const containers = output.trim().split('\n').filter(line => line).map(line => JSON.parse(line));
+    const runningContainers = containers.filter(c => c.State === 'running');
+    
+    if (runningContainers.length < 4) {
+      console.log('\nDocker Compose stack not fully running. Starting it now...');
+      console.log('This may take a few minutes...\n');
+      execSync('docker compose up -d --build', { cwd: __dirname + '/..', stdio: 'inherit' });
+      console.log('\nStack started successfully!');
+      console.log('Waiting for services to be ready...\n');
+      await sleep(15000);
+    } else {
+      console.log('Docker Compose stack is running\n');
+    }
+  } catch (error) {
+    console.log('\nDocker Compose stack not running. Starting it now...');
+    console.log('This may take a few minutes...\n');
+    try {
+      execSync('docker compose up -d --build', { cwd: __dirname + '/..', stdio: 'inherit' });
+      console.log('\nStack started successfully!');
+      console.log('Waiting for services to be ready...\n');
+      await sleep(15000);
+    } catch (startError) {
+      console.error('Failed to start Docker Compose stack');
+      process.exit(1);
+    }
   }
 }
 
-runTests();
+checkAndStartStack().then(() => runTests());
