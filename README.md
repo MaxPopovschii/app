@@ -33,9 +33,9 @@ Un sistema di crawling distribuito che acquisisce screenshot di pagine web e li 
    OPENAI_MOCK=1
    ```
 
-3. **Build del frontend**:
+3. **Build di tutti i componenti**:
    ```bash
-   yarn build-frontend
+   yarn build-all
    ```
 
 4. **Avvia lo stack completo**:
