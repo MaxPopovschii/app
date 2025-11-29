@@ -86,10 +86,13 @@ const isUrlValid = computed(() => {
 });
 
 function getLoadingMessage() {
-  if (pollingAttempts.value < 5) return 'Sto catturando lo screenshot del sito...';
-  if (pollingAttempts.value < 10) return 'L\'intelligenza artificiale sta analizzando il design...';
-  if (pollingAttempts.value < 15) return 'Esamino layout, colori e tipografia...';
-  if (pollingAttempts.value < 20) return 'Quasi fatto, sto preparando i risultati...';
+  // pollingAttempts is approximate seconds elapsed
+  if (pollingAttempts.value < 3) return 'In coda per l\'elaborazione...';
+  if (pollingAttempts.value < 8) return 'Sto catturando lo screenshot del sito...';
+  if (pollingAttempts.value < 12) return 'L\'intelligenza artificiale sta analizzando il design...';
+  if (pollingAttempts.value < 18) return 'Rilevo layout, colori e tipografia...';
+  if (pollingAttempts.value < 26) return 'Sto sintetizzando i punti principali e i suggerimenti...';
+  if (pollingAttempts.value < 35) return 'Quasi fatto, sto preparando i risultati...';
   return 'Ultimi ritocchi all\'analisi...';
 }
 
@@ -202,13 +205,54 @@ function reset() {
 }
 
 function formatDescription(text: string): string {
-  // Converte **Titolo** in <strong>
-  let formatted = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-  
-  // Aggiunge spazi tra le sezioni
-  formatted = formatted.replace(/\n\n/g, '<br><br>');
-  formatted = formatted.replace(/\n/g, '<br>');
-  
-  return formatted;
+  if (!text) return '';
+
+  const escapeHtml = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const formatInline = (s: string) => {
+    // temporarily mark bold segments to avoid escaping them
+    const placeholderStart = '__BOLD_START__';
+    const placeholderEnd = '__BOLD_END__';
+    let tmp = s.replace(/\*\*(.*?)\*\*/g, (_m, p1) => placeholderStart + p1 + placeholderEnd);
+
+    // escape HTML then restore bold and convert links
+    let escaped = escapeHtml(tmp);
+    escaped = escaped.replace(new RegExp(placeholderStart + '(.*?)' + placeholderEnd, 'g'), '<strong>$1</strong>');
+    escaped = escaped.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+    return escaped;
+  };
+
+  // Normalize line endings and split into blocks separated by empty lines
+  const blocks = text.replace(/\r\n/g, '\n').split(/\n{2,}/g).map(b => b.trim()).filter(Boolean);
+
+  const html = blocks.map(block => {
+    const lines = block.split(/\n+/).map(l => l.trim()).filter(Boolean);
+
+    // unordered list: lines starting with - or *
+    if (lines.every(l => /^[-*]\s+/.test(l))) {
+      const items = lines.map(l => `<li>${formatInline(l.replace(/^[-*]\s+/, ''))}</li>`).join('');
+      return `<ul>${items}</ul>`;
+    }
+
+    // ordered list: lines like 1. item
+    if (lines.every(l => /^\d+\.\s+/.test(l))) {
+      const items = lines.map(l => `<li>${formatInline(l.replace(/^\d+\.\s+/, ''))}</li>`).join('');
+      return `<ol>${items}</ol>`;
+    }
+
+    // single-line heading in the form **Heading** or **Heading**:
+    if (lines.length === 1) {
+      const headingMatch = lines[0].match(/^\*\*(.+?)\*\*:?$/);
+      if (headingMatch) {
+        return `<h3 class="desc-section">${escapeHtml(headingMatch[1])}</h3>`;
+      }
+    }
+
+    // default: paragraph (keep inner inline formatting)
+    return `<p>${formatInline(block)}</p>`;
+  }).join('');
+
+  return html;
 }
 </script>
