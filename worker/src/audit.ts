@@ -1,4 +1,4 @@
-import { chromium } from 'playwright';
+import { chromium, BrowserContext } from 'playwright';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import robotsParser from 'robots-parser';
@@ -36,33 +36,45 @@ export async function runAudit(report: AuditReport, options: AuditOptions): Prom
   let browser;
   try {
     await publish();
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({ headless: true, proxy: { server: 'http://127.0.0.1:9', bypass: '<-loopback>' }, args: ['--force-webrtc-ip-handling-policy=disable_non_proxied_udp'] });
     for (let index = 0; index < urls.length && index < report.maxPages; index++) {
       const url = urls[index];
       report.totalPages = Math.min(urls.length, report.maxPages);
       for (const viewport of VIEWPORTS) {
         const started = Date.now();
         const record: PageResult = { url, viewport: viewport.name, status: 'failed', durationMs: 0 };
-        let context;
+        let context: BrowserContext | undefined; let expired = false; let closed = false; let deadline: ReturnType<typeof setTimeout> | undefined;
         try {
           if (!await mayScan(url)) { record.status = 'blocked'; record.error = 'Scansione esclusa da robots.txt'; continue; }
           context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, serviceWorkers: 'block', acceptDownloads: false, userAgent: 'LaunchCheck/0.1 (+authorized-website-audits)', reducedMotion: 'reduce' });
+          await context.addInitScript(() => {
+            for (const key of ['RTCPeerConnection', 'webkitRTCPeerConnection']) Object.defineProperty(globalThis, key, { value: undefined, configurable: false, writable: false });
+          });
+          context.on('close', () => { closed = true; });
+          deadline = setTimeout(() => { expired = true; context?.close().catch(() => {}); }, 40_000);
           await context.routeWebSocket('**/*', ws => ws.close());
-          let requests = 0, bytes = 0, limited = false, blocked = 0;
+          let requests = 0, bytes = 0, limited = false, blocked = 0, active = 0;
+          const waiters: (() => void)[] = [];
+          const acquire = async () => { if (active >= 6) await new Promise<void>(resolve => waiters.push(resolve)); active++; };
+          const release = () => { active--; waiters.shift()?.(); };
           // Every outbound request is fetched by the DNS-pinned safe client. Never route.continue().
           await context.route('**/*', async route => {
             const request = route.request();
             if (!['GET','HEAD'].includes(request.method()) || ['media'].includes(request.resourceType())) { blocked++; await route.abort(); return; }
             if (++requests > 180 || bytes > 15_000_000) { limited = true; await route.abort(); return; }
+            await acquire();
             try {
+              if (closed || expired) { await route.abort().catch(() => {}); return; }
               normalizeTarget(request.url());
               if (request.isNavigationRequest() && new URL(request.url()).origin !== origin) throw new Error('Redirect fuori dal sito autorizzato');
               if (request.isNavigationRequest() && !await mayScan(request.url())) throw new Error('Escluso da robots.txt');
               const response = await client(request.url(), { followRedirects: false, maxBytes: 5_000_000, method: request.method() as 'GET' | 'HEAD' });
               bytes += response.body.length;
+              if (bytes > 15_000_000) { limited = true; await route.abort(); return; }
               // Fulfill redirects unchanged: the next hop is intercepted and validated again.
               await route.fulfill({ status: response.status, headers: response.headers, body: response.body });
             } catch { blocked++; await route.abort().catch(() => {}); }
+            finally { release(); }
           });
           const page = await context.newPage();
           const jsErrors = new Set<string>();
@@ -97,8 +109,9 @@ export async function runAudit(report: AuditReport, options: AuditOptions): Prom
             try { const target = normalizeTarget(href); if (target.origin !== origin || /\.(pdf|zip|png|jpe?g|gif|svg|mp4|webp)$/i.test(target.pathname)) return []; return [target.href]; } catch { return []; }
           });
           for (const href of internalLinks) {
+            if (expired) throw new Error('Tempo massimo della vista superato');
             if (!seen.has(href) && urls.length < report.maxPages) { seen.add(href); urls.push(href); }
-            if (linkCache.size >= 40 && !linkCache.has(href)) continue;
+            if (linkCache.size >= 40 && !linkCache.has(href)) { report.notes.push('Controllo collegamenti limitato a 40 destinazioni interne per audit.'); continue; }
             if (!linkCache.has(href)) {
               try {
                 if (!await mayScan(href)) continue;
@@ -127,11 +140,13 @@ export async function runAudit(report: AuditReport, options: AuditOptions): Prom
               } else report.notes.push('Confronto visivo saltato: dimensioni degli screenshot differenti.');
             } catch { report.notes.push('Una prova della baseline non è disponibile: confronto visivo saltato.'); }
           }
+          if (expired) throw new Error('Tempo massimo della vista superato');
           record.status = limited ? 'failed' : 'done';
           if (limited) record.error = 'Limite di risorse raggiunto: acquisizione incompleta';
           if (blocked) report.notes.push(`${url} (${viewport.name}): ${blocked} richieste non ammesse o non disponibili; i risultati possono essere incompleti.`);
         } catch (err: any) { record.error = err.message.slice(0,250); }
         finally {
+          if (deadline) clearTimeout(deadline);
           await context?.close(); record.durationMs = Date.now() - started; report.pages.push(record);
           report.scannedPages = report.pages.filter(p => p.status === 'done').length;
           report.totalPages = Math.min(urls.length, report.maxPages) * 2;

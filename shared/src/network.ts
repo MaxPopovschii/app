@@ -23,11 +23,12 @@ export interface RequestOptions { maxBytes?: number; timeoutMs?: number; followR
 export type SafeClient = (url: string, options?: RequestOptions) => Promise<SafeResponse>;
 export type Resolver = (host: string) => Promise<{ address: string; family: number }[]>;
 export function createSafeClient(resolve: Resolver = host => dns.lookup(host, { all: true, verbatim: true })): SafeClient {
-  async function request(value: string, options: RequestOptions = {}, redirects = 0): Promise<SafeResponse> {
+  async function request(value: string, options: RequestOptions = {}, redirects = 0, expiresAt = Date.now() + (options.timeoutMs ?? 10_000)): Promise<SafeResponse> {
+    if (Date.now() >= expiresAt) throw new Error('Tempo massimo della richiesta superato');
     const url = normalizeTarget(value);
     const host = url.hostname.replace(/^\[|\]$/g, '');
     let dnsTimer: ReturnType<typeof setTimeout> | undefined;
-    const lookup = () => Promise.race([resolve(host), new Promise<never>((_resolve, reject) => { dnsTimer = setTimeout(() => reject(new Error('Timeout DNS')), 5000); })]).finally(() => clearTimeout(dnsTimer));
+    const lookup = () => Promise.race([resolve(host), new Promise<never>((_resolve, reject) => { dnsTimer = setTimeout(() => reject(new Error('Timeout DNS')), Math.min(5000, expiresAt - Date.now())); })]).finally(() => clearTimeout(dnsTimer));
     const addresses = ipaddr.isValid(host) ? [{ address: host, family: ipaddr.parse(host).kind() === 'ipv6' ? 6 : 4 }] : await lookup();
     if (!addresses.length || addresses.some(a => !isPublicAddress(a.address))) throw new Error('DNS verso una rete privata o riservata: richiesta bloccata');
     const pinned = addresses.find(a => a.family === 4) || addresses[0];
@@ -52,14 +53,14 @@ export function createSafeClient(resolve: Resolver = host => dns.lookup(host, { 
           resolveResponse({ status: res.statusCode || 502, headers, body: Buffer.concat(chunks), url: url.href });
         });
       });
-      const deadline = setTimeout(() => req.destroy(new Error('Tempo massimo della richiesta superato')), options.timeoutMs ?? 10_000);
+      const deadline = setTimeout(() => req.destroy(new Error('Tempo massimo della richiesta superato')), Math.max(1, expiresAt - Date.now()));
       req.on('close', () => clearTimeout(deadline));
       req.setTimeout(options.timeoutMs ?? 10_000, () => req.destroy(new Error('Timeout di rete')));
       req.on('error', reject); req.end();
     });
     if (options.followRedirects !== false && [301,302,303,307,308].includes(response.status) && response.headers.location) {
       if (redirects >= 5) throw new Error('Troppi redirect');
-      return request(new URL(response.headers.location, url).href, options, redirects + 1);
+      return request(new URL(response.headers.location, url).href, options, redirects + 1, expiresAt);
     }
     return response;
   }
