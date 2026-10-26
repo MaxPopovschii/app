@@ -1,147 +1,85 @@
-# Mini Crawler - API + Frontend + Worker
+# LaunchCheck — pilot per agenzie web
 
-Un sistema di crawling distribuito che acquisisce screenshot di pagine web e li analizza usando OpenAI Vision per descrivere il design e l'UX.
+Controllo qualità di pagine pubbliche su desktop e mobile, con prove fotografiche, report condivisibili e confronto con una verifica precedente.
 
-## Architettura
+Questa release serve a erogare i primi controlli assistiti a pagamento. È un workspace **per una sola agenzia per installazione**: non contiene ancora account multi-tenant, abbonamenti, pagamenti o notifiche automatiche. Le valutazioni generative AI del vecchio crawler sono state rimosse dal percorso di audit: tutte le segnalazioni indicano un comportamento osservato o una variazione visiva da verificare.
 
-- **API (Express)**: Gestisce richieste di crawl, serve il frontend statico
-- **Worker (Node + Playwright)**: Consuma la coda, acquisisce screenshot, chiama OpenAI
-- **Frontend (Vue 3 + TypeScript)**: Interfaccia utente per inviare URL e visualizzare risultati
-- **MongoDB**: Persistenza dei dati
-- **RabbitMQ**: Sistema di code per comunicazione asincrona
+## Cosa funziona
 
-## Prerequisiti
+- Scansione fino a 10 URL dello stesso sito, scoperti dai link interni, su desktop 1440×900 e mobile 390×844.
+- Errori HTTP della pagina, fino a 40 link interni verificati per audit, immagini non caricate, eccezioni JavaScript e contenuti che superano la larghezza del viewport.
+- Screenshot del primo viewport di ogni pagina; differenze visive rispetto a una baseline (soglia: 1% dei pixel). Animazioni CSS disabilitate durante lo screenshot. Date, carousel e altri contenuti dinamici possono comunque generare differenze.
+- Stati separati per scansione completa, parziale e fallita; robots.txt rispettato. Una pagina fallita non può far risultare risolti i problemi della baseline.
+- Lista report e stati delle segnalazioni gestiti dall’agenzia. I problemi non più rilevati vengono riportati separatamente dalle segnalazioni marcate manualmente come risolte.
+- Branding con nome agenzia e logo raster; report condiviso in sola lettura con link casuale revocabile; stampa/PDF dal browser, incluse le prove fotografiche.
+- Persistenza MongoDB, coda RabbitMQ con conferma di pubblicazione, un worker alla volta e aggiornamenti di avanzamento. Una lease recupera le consegne rimaste in corso dopo il crash del worker.
 
-- Docker e Docker Compose
-- Node.js 20+ e Yarn (per sviluppo locale)
-- OpenAI API Key
+## Avvio con Docker
 
-## Setup
+Requisiti: Docker Engine con Compose, almeno 2 GB disponibili al worker e accesso Internet per scaricare le immagini. Le immagini si compilano dai sorgenti, senza build locali preliminari.
 
-1. **Copia il file di ambiente**:
-   ```bash
-   cp .env.example .env
-   ```
-
-2. **Configura la tua OpenAI API Key** in `.env`:
-   ```
-   OPENAI_API_KEY=sk-proj-your-key-here
-   ```
-   
-   Oppure usa la modalità mock:
-   ```
-   OPENAI_MOCK=1
-   ```
-
-3. **Build di tutti i componenti**:
-   ```bash
-   yarn build-all
-   ```
-
-4. **Avvia lo stack completo**:
-   ```bash
-   docker compose up --build
-   ```
-
-## Utilizzo
-
-- **Frontend**: http://localhost:8080
-- **RabbitMQ Management UI**: http://localhost:15672 (guest/guest)
-- **API Health**: http://localhost:8080/healthz
-
-### API Endpoints
-
-#### POST /crawl
-Avvia un nuovo crawl:
-```bash
-curl -X POST http://localhost:8080/crawl \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com"}'
+```sh
+cp .env.example .env
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+# Eseguire una seconda volta: usare valori differenti per ADMIN_TOKEN e RABBIT_PASSWORD.
+# Inserire i due valori nel file .env, che non va versionato.
+docker compose up --build -d
 ```
 
-Risposta:
-```json
-{
-  "uid": "01J..."
-}
+Aprire `http://localhost:8080` e inserire `ADMIN_TOKEN` nell’accesso agenzia. MongoDB e RabbitMQ non pubblicano porte verso l’host; l’applicazione è legata al loopback. Le immagini e i dati restano nei volumi Docker. Per un accesso remoto mettere davanti un reverse proxy HTTPS e un controllo di accesso; non esporre i database o il broker.
+
+`ADMIN_TOKEN` è una credenziale amministrativa dell’intero workspace: distribuirla solo al personale dell’agenzia. Ruotarla nel file `.env` e ricreare il servizio API per revocare tutte le sessioni amministrative. Il browser la conserva soltanto in sessionStorage. I link condivisi usano un segreto differente, memorizzato come hash nel database; generarne uno nuovo invalida il precedente.
+
+## Flusso per il primo cliente
+
+1. Creare un report con URL, cliente, agenzia e numero massimo di pagine, confermando di essere autorizzati al controllo.
+2. Verificare manualmente le segnalazioni e gli screenshot. Un contenuto fuori schermo può essere intenzionale; l’assenza di errori non è un’approvazione automatica del sito.
+3. Segnare le segnalazioni risolte o ignorate e condividere il report. I destinatari non possono modificarlo.
+4. Dopo le correzioni usare “Ripeti e confronta” per ottenere un secondo report con baseline. Per modifiche volute verificare il confronto visivo e usare la nuova scansione come baseline successiva.
+5. Stampare il report dal browser scegliendo “Salva come PDF”. Il PDF non contiene i controlli amministrativi.
+
+I report e gli screenshot possono contenere dati visibili sulle pagine del cliente. Il link condiviso consente l’accesso a chi lo possiede. Concordare con il cliente la conservazione, revocare i link al termine e gestire backup e cancellazione dei volumi secondo tale accordo. Questa release non applica una cancellazione automatica.
+
+## Sviluppo e verifiche
+
+Node.js 22 e npm. Un unico lockfile e workspace condiviso per tipi, modello dati e client HTTP sicuro.
+
+```sh
+npm ci
+npm run build
+npx playwright install chromium
+npm test
 ```
 
-#### GET /crawl/:uid
-Verifica lo stato di un crawl:
-```bash
-curl http://localhost:8080/crawl/01J...
+`npm test` esegue test di API, isolamento dei link, URL/SSRF, confronto baseline, browser reale su siti fixture e interfaccia fino alla generazione di un PDF. I test browser richiedono un ambiente in grado di avviare Chromium. Su CI vengono installate anche le librerie di sistema con `npx playwright install --with-deps chromium`.
+
+Per i test di persistenza e coda aggiungere MongoDB/RabbitMQ e impostare:
+
+```sh
+INTEGRATION_TESTS=1 MONGO_URI=mongodb://localhost:27017/launchcheck_test RABBIT_URL=amqp://localhost:5672 npm test
 ```
 
-Risposte possibili:
-- `{"status": "pending"}` - In elaborazione
-- `{"status": "done", "result": {...}}` - Completato con successo
-- `{"status": "error", "message": "..."}` - Errore
+Senza queste variabili il solo test di integrazione dei servizi viene esplicitamente saltato. Gli altri test usano siti fixture in memoria: non inviano richieste a siti di terzi. La CI verifica anche avvio reale dei due container, autenticazione API e audit delle dipendenze di produzione. Le prove browser sono negli artifact GitHub Actions.
 
-## Testing
+Per il frontend in sviluppo: `npm run dev:web`; Vite inoltra `/api` al server locale sulla porta 8080. Il frontend si serve dall’API dopo `npm run build`.
 
-Esegui i test end-to-end:
-```bash
-yarn test:e2e
-```
+## Confini del pilot
 
-Questo:
-- Avvia lo stack Docker
-- Testa 3 URL (incluso uno vietato da robots.txt)
-- Verifica l'idempotenza delle richieste
-- Valida gli esiti
+- Solo pagine pubbliche e GET/HEAD: nessun login, invio di moduli, checkout, validazione di cookie banner o verifica del corretto recapito di un contatto. Le risorse che richiedono cookie di sessione possono non essere riproducibili dal client isolato.
+- Screenshot del viewport iniziale, non screenshot completi di tutta la pagina. Le misure di overflow riguardano gli elementi del DOM che risultano visibili secondo i controlli CSS eseguiti.
+- Limiti per richiesta (tempo e byte), per pagina (risorse e byte), per audit (URL, link, segnalazioni) e per workspace. Budget esauriti producono una copertura parziale. Rate limit per IP, da configurare esplicitamente dietro un proxy affidabile.
+- Il browser ha service worker e WebSocket bloccati. Tutte le richieste di pagina passano attraverso un client HTTP che valida protocollo, porta, host e ogni risposta DNS e fissa l’IP della connessione; i redirect vengono rivalidati. Non disabilita la verifica TLS.
+- Prima di un servizio pubblico non supervisionato aggiungere una barriera di egress a livello di rete per il worker, quote atomiche e conservazione automatica. Il pilot è riservato ad amministratori fidati e non è un servizio di scansione anonimo.
+- Nessuna certificazione di sicurezza/accessibilità o promessa di incremento conversioni. Nessuna API AI a pagamento richiesta per i controlli attuali.
 
-## Sviluppo Locale
+## Struttura
 
-### API
-```bash
-cd api
-yarn install
-yarn dev
-```
+- `shared/`: tipi di report, schema MongoDB, confronto e client HTTP con protezione SSRF.
+- `api/`: accesso agenzia, creazione e avanzamento report, gestione segnalazioni e condivisione.
+- `worker/`: acquisizione Playwright, controlli deterministici, screenshot e differenze.
+- `web/`: interfaccia Vue, report responsive e layout di stampa.
+- `tests/`: fixture, test API/rete/browser/UI e integrazione dei servizi.
 
-### Worker
-```bash
-cd worker
-yarn install
-yarn dev
-```
+## Evoluzione commerciale successiva
 
-### Frontend
-```bash
-cd web
-yarn install
-yarn dev
-```
-
-## Variabili d'Ambiente
-
-| Variabile | Default | Descrizione |
-|-----------|---------|-------------|
-| MONGO_URI | mongodb://mongo:27017/crawler | URI MongoDB |
-| RABBIT_URL | amqp://rabbit:5672 | URL RabbitMQ |
-| PORT | 8080 | Porta API |
-| OPENAI_API_KEY | - | Chiave API OpenAI |
-| OPENAI_MOCK | 0 | 1 per usare risposte mock |
-| BASE_URL | http://api:8080 | Base URL per l'API |
-
-## Note
-
-- Il worker rispetta robots.txt e segna come errore URL vietati
-- Timeout di 30 secondi per pagina
-- Screenshot JPEG qualità 50 per ottimizzare dimensioni
-- Idempotenza: stessa URL entro 5 minuti riusa lo stesso job
-- Rate limiting: 10 richieste/minuto per IP
-- Retry automatico: massimo 2 tentativi con dead-letter queue
-
-## Struttura Repository
-
-```
-/app
-  /api          - Express API + static server
-  /web          - Vue 3 frontend
-  /worker       - Playwright worker
-  docker-compose.yml
-  Dockerfile.api
-  Dockerfile.worker
-  .env.example
-```
+Validare tre controlli assistiti pagati prima di aggiungere fatturazione, account per più agenzie o scansioni pianificate. Un abbonamento richiede poi isolamento tenant effettivo, ruoli, fatturazione, conservazione e gestione operativa. Il primo servizio può essere erogato manualmente con questa release dopo revisione e verifica delle segnalazioni.

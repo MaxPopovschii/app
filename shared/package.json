@@ -1,0 +1,16 @@
+{
+  "name": "@launchcheck/shared",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "mongoose": "^8.19.0",
+    "ipaddr.js": "^2.2.0"
+  },
+  "devDependencies": {}
+}

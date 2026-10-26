@@ -1,0 +1,79 @@
+name: LaunchCheck CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    services:
+      mongo:
+        image: mongo:7
+        ports: [27017:27017]
+        options: --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping:1})'" --health-interval 10s --health-timeout 5s --health-retries 10
+      rabbit:
+        image: rabbitmq:3.13-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: test
+          RABBITMQ_DEFAULT_PASS: test
+        ports: [5672:5672]
+        options: --health-cmd "rabbitmq-diagnostics -q ping" --health-interval 10s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm test
+        env:
+          INTEGRATION_TESTS: '1'
+          MONGO_URI: mongodb://127.0.0.1:27017/launchcheck_ci
+          RABBIT_URL: amqp://test:test@127.0.0.1:5672
+      - run: npm audit --omit=dev --audit-level=high
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: launchcheck-browser-evidence
+          path: test-results/
+          retention-days: 7
+  containers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate and boot both application images
+        env:
+          ADMIN_TOKEN: ci-only-access-key-with-at-least-32-characters
+          RABBIT_PASSWORD: ci-only-local-broker
+        run: |
+          docker compose config --quiet
+          docker compose up --build -d --wait
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8080/healthz; then break; fi
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:8080/healthz
+          curl --fail --silent -H "Authorization: Bearer $ADMIN_TOKEN" http://127.0.0.1:8080/api/reports
+          test "$(curl --silent -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/reports)" = 401
+          for attempt in $(seq 1 30); do
+            if docker compose logs worker | grep 'Worker pronto'; then break; fi
+            sleep 2
+          done
+          docker compose logs worker | grep 'Worker pronto'
+      - name: Container diagnostics
+        if: failure()
+        env:
+          ADMIN_TOKEN: ci-only-access-key-with-at-least-32-characters
+          RABBIT_PASSWORD: ci-only-local-broker
+        run: docker compose logs --tail 100
+      - name: Stop containers
+        if: always()
+        env:
+          ADMIN_TOKEN: ci-only-access-key-with-at-least-32-characters
+          RABBIT_PASSWORD: ci-only-local-broker
+        run: docker compose down --volumes

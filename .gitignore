@@ -9,3 +9,8 @@ coverage/
 api/public/
 .vscode/
 *.tsbuildinfo
+
+artifacts/
+test-results/
+.env.*
+!.env.example
