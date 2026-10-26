@@ -9,7 +9,7 @@ import amqp from 'amqplib';
 import request from 'supertest';
 import { mongoStore, AuditModel } from '@launchcheck/shared';
 import { createApp } from '../api/src/app';
-import { runAudit } from '../worker/src/audit';
+import { runAudit } from '../worker/dist/audit';
 import { fixtureClient } from './helpers';
 test('MongoDB persists the submitted report and RabbitMQ delivers the audit for real browser processing', { skip: process.env.INTEGRATION_TESTS !== '1', timeout: 90_000 }, async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(),'launchcheck-integration-'));

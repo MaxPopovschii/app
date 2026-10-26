@@ -14,6 +14,8 @@ test('report management is private; share links are read-only, opaque and revoca
   await request(app).post('/api/reports').set('Authorization','Bearer '+key).send({ ...payload, authorized: false }).expect(400);
   const created = await request(app).post('/api/reports').set('Authorization','Bearer '+key).send(payload).expect(202);
   assert.equal(jobs.length,1); const token = created.body.sharePath.split('/').pop();
+  await request(app).get('/api/reports').set('Authorization','Bearer '+token).expect(401);
+  await request(app).get('/api/share/'+token+'/assets/%2e%2e%2f.env').expect(404);
   const stored = await store.get(created.body.id); assert.equal(stored?.shareHash,hashToken(token)); assert.ok(!JSON.stringify(stored).includes(token));
   const shared = await request(app).get('/api/share/'+token).expect(200); assert.ok(!('shareHash' in shared.body));
   await request(app).get('/api/share/'+token+'/assets/0-desktop.png').expect(404);

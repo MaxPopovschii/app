@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import { chromium } from 'playwright';
 import { createApp } from '../api/src/app';
-import { runAudit } from '../worker/src/audit';
+import { runAudit } from '../worker/dist/audit';
 import { memoryStore, fixtureClient } from './helpers';
 
 test('agency creates a report, sees real evidence, shares read-only and revokes access', { timeout: 120_000 }, async () => {

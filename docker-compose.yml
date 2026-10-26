@@ -32,7 +32,7 @@ services:
       RABBIT_URL: amqp://launchcheck:${RABBIT_PASSWORD}@rabbit:5672
       ADMIN_TOKEN: ${ADMIN_TOKEN:?Set ADMIN_TOKEN in .env}
     volumes: [audit-artifacts:/data/artifacts:ro]
-    networks: [backend]
+    networks: [backend, frontend]
     depends_on:
       mongo: {condition: service_healthy}
       rabbit: {condition: service_healthy}
@@ -56,6 +56,7 @@ services:
 networks:
   backend: {internal: true}
   egress: {}
+  frontend: {}
 volumes:
   mongo-data:
   rabbit-data:

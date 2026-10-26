@@ -10,7 +10,7 @@
   ],
   "scripts": {
     "build": "npm run build -w shared && npm run build -w api && npm run build -w worker && npm run build:check -w web",
-    "test": "npm run build -w shared && tsx --test tests/*.test.ts",
+    "test": "npm run build && tsx --test tests/*.test.ts",
     "start": "npm run start -w api",
     "dev:web": "npm run dev -w web"
   },
