@@ -31,13 +31,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: "22"
           cache: npm
       - run: npm ci
       - run: npm run build
       - run: npm test
         env:
-          INTEGRATION_TESTS: '1'
+          INTEGRATION_TESTS: "1"
           MONGO_URI: mongodb://mongo:27017/launchcheck_ci
           RABBIT_URL: amqp://test:test@rabbit:5672
       - run: npm audit --omit=dev --audit-level=high
