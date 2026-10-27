@@ -25,6 +25,7 @@ export interface PageResult {
   error?: string;
   httpStatus?: number;
   durationMs: number;
+  comparisonEligible?: boolean;
   changedPixelsPercent?: number;
 }
 export interface AuditReport {

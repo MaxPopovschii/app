@@ -478,6 +478,8 @@ export async function runAudit(
           }
           if (expired) throw new Error("Tempo massimo della vista superato");
           record.status = limited ? "failed" : "done";
+          record.comparisonEligible =
+            !limited && blocked === 0 && (record.httpStatus ?? 200) < 400;
           if (limited)
             record.error =
               "Limite di risorse raggiunto: acquisizione incompleta";

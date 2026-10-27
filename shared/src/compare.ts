@@ -23,7 +23,12 @@ export function compareWithBaseline(
   const current = new Set(report.findings.map((f) => f.fingerprint));
   const covered = new Set(
     report.pages
-      .filter((p) => p.status === "done")
+      .filter(
+        (p) =>
+          p.status === "done" &&
+          (p.httpStatus ?? 200) < 400 &&
+          p.comparisonEligible !== false,
+      )
       .map((p) => p.url + "|" + p.viewport),
   );
   // A failed or unvisited page cannot prove that an old problem disappeared.

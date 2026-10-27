@@ -66,6 +66,13 @@ test("failed and unvisited pages never count as resolved baseline issues", () =>
   next.pages[0].status = "done";
   compareWithBaseline(next, baseline);
   assert.equal(next.resolvedSinceBaseline.length, 1);
+  next.pages[0].httpStatus = 404;
+  compareWithBaseline(next, baseline);
+  assert.equal(next.resolvedSinceBaseline.length, 0);
+  next.pages[0].httpStatus = 200;
+  next.pages[0].comparisonEligible = false;
+  compareWithBaseline(next, baseline);
+  assert.equal(next.resolvedSinceBaseline.length, 0);
 });
 
 test("HTTP transport pins a public DNS result and rejects a redirect to cloud metadata before connecting", async () => {

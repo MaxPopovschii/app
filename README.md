@@ -9,7 +9,7 @@ Questa release serve a erogare i primi controlli assistiti a pagamento. È un wo
 - Scansione fino a 10 URL dello stesso sito, scoperti dai link interni, su desktop 1440×900 e mobile 390×844.
 - Errori HTTP della pagina, fino a 40 link interni verificati per audit, immagini non caricate, eccezioni JavaScript e contenuti che superano la larghezza del viewport.
 - Screenshot del primo viewport di ogni pagina; differenze visive rispetto a una baseline (soglia: 1% dei pixel). Animazioni CSS disabilitate durante lo screenshot. Date, carousel e altri contenuti dinamici possono comunque generare differenze.
-- Stati separati per scansione completa, parziale e fallita; robots.txt rispettato. Una pagina fallita non può far risultare risolti i problemi della baseline.
+- Stati separati per scansione completa, parziale e fallita; robots.txt rispettato. Una pagina fallita, una risposta HTTP di errore o risorse non verificabili non possono far risultare risolti i problemi della baseline.
 - Lista report e stati delle segnalazioni gestiti dall’agenzia. I problemi non più rilevati vengono riportati separatamente dalle segnalazioni marcate manualmente come risolte.
 - Branding con nome agenzia e logo raster; report condiviso in sola lettura con link casuale revocabile; stampa/PDF dal browser, incluse le prove fotografiche.
 - Persistenza MongoDB, coda RabbitMQ con conferma di pubblicazione, un worker alla volta e aggiornamenti di avanzamento. Una lease recupera le consegne rimaste in corso dopo il crash del worker.
