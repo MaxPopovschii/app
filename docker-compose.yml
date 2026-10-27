@@ -33,7 +33,14 @@ services:
     depends_on:
       secrets-init: { condition: service_completed_successfully }
     healthcheck:
-      test: [CMD, mongosh, --quiet, --eval, "db.adminCommand('ping').ok"]
+      test:
+        [
+          CMD,
+          mongosh,
+          --quiet,
+          --eval,
+          "new Mongo(require('fs').readFileSync('/run/launchcheck/mongo_init_uri','utf8').trim()).getDB('admin').runCommand({ping:1}).ok",
+        ]
       interval: 5s
       timeout: 5s
       retries: 30

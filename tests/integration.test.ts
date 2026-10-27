@@ -111,6 +111,29 @@ test(
       assert.ok(message);
       assert.equal(message.content.toString(), account.id);
       channel.ack(message);
+      // Exercise the actual worker and controlled egress without contacting a third-party site.
+      const rejected = stored(report("http://127.0.0.1/", 1), agencyId);
+      await UsageModel.deleteMany({ agencyId });
+      await mongoStore.reserve(rejected);
+      channel.sendToQueue(
+        "launchcheck.audits",
+        Buffer.from(JSON.stringify({ id: rejected.id })),
+        { persistent: true },
+      );
+      await channel.waitForConfirms();
+      let terminal: any;
+      for (let n = 0; n < 90; n++) {
+        terminal = await mongoStore.get(rejected.id, agencyId);
+        if (terminal?.quotaReleased) break;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      assert.equal(
+        terminal?.quotaReleased,
+        true,
+        "actual worker must release its reservation",
+      );
+      assert.equal(terminal?.report.status, "failed");
+      assert.equal((await AgencyModel.findOne({ id: agencyId })).active, 0);
       const fetcher = createFetcherClient(
         "http://fetcher:8081",
         secret("FETCHER_TOKEN"),
