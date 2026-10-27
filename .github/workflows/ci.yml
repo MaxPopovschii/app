@@ -48,7 +48,7 @@ jobs:
             if curl --fail --silent http://127.0.0.1:8080/readyz; then break; fi
             sleep 2
           done
-          curl --fail --silent http://127.0.0.1:8080/readyz
+          curl --fail-with-body --silent http://127.0.0.1:8080/readyz
           test "$(curl --silent -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/reports)" = 401
       - name: Transaction, browser, queue and fetcher integration
         run: docker compose -f docker-compose.yml -f compose.test.yml run --build --rm test

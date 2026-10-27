@@ -32,10 +32,10 @@ EXPOSE 8081
 CMD ["node", "fetcher/dist/index.js"]
 FROM mcr.microsoft.com/playwright:v1.57.0-noble AS worker
 WORKDIR /app
-COPY --from=production-deps --chown=pwuser:pwuser /app /app
-RUN mkdir -p /data/artifacts && chown -R pwuser:pwuser /data
-USER pwuser
-ENV ARTIFACT_DIR=/data/artifacts
+COPY --from=production-deps --chown=1000:1000 /app /app
+RUN mkdir -p /data/artifacts && chown -R 1000:1000 /data
+USER 1000:1000
+ENV ARTIFACT_DIR=/data/artifacts HOME=/tmp
 CMD ["node", "worker/dist/index.js"]
 FROM mcr.microsoft.com/playwright:v1.57.0-noble AS test
 WORKDIR /app
