@@ -6,12 +6,12 @@
 </template>
 <script setup lang="ts">
 import { ref, watch, onBeforeUnmount } from "vue";
-const props = defineProps<{ url: string; token?: string; alt: string }>();
+const props = defineProps<{ url: string; alt: string }>();
 const src = ref(""),
   failed = ref(false);
 let controller: AbortController | undefined;
 watch(
-  () => [props.url, props.token],
+  () => props.url,
   async () => {
     controller?.abort();
     controller = new AbortController();
@@ -21,7 +21,6 @@ watch(
     failed.value = false;
     try {
       const response = await fetch(props.url, {
-        headers: props.token ? { Authorization: "Bearer " + props.token } : {},
         signal,
       });
       if (!response.ok) throw new Error();

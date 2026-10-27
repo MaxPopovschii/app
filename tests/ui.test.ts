@@ -6,7 +6,12 @@ import os from "node:os";
 import { chromium } from "playwright";
 import { createApp } from "../api/src/app";
 import { runAudit } from "../worker/dist/audit";
-import { memoryStore, fixtureClient } from "./helpers";
+import {
+  memoryStore,
+  fixtureClient,
+  memoryIdentity,
+  testPassword,
+} from "./helpers";
 
 test(
   "agency creates a report, sees real evidence, shares read-only and revokes access",
@@ -15,34 +20,43 @@ test(
     const dir = await mkdtemp(path.join(os.tmpdir(), "launchcheck-ui-"));
     const store = memoryStore(),
       jobs: Promise<any>[] = [],
-      key = "ui-test-agency-access-key-32-characters";
-    const app = createApp({
+      identity = await memoryIdentity();
+    const options = {
       store,
-      adminToken: key,
+      identities: identity.identities,
+      authSecret: "ui-test-secret-with-at-least-32-characters",
+      secureCookies: false,
+      publicOrigin: "http://localhost",
+      readiness: async () => ({ ready: true, checks: { worker: true } }),
       artifactDir: dir,
       webDir: path.resolve("web/dist"),
-      enqueue: async (id) => {
-        const doc = (await store.get(id))!;
+      enqueue: async (id: string) => {
+        const doc = (await store.get(id, "a"))!;
         jobs.push(
           runAudit(doc.report, {
             artifactDir: dir,
             client: fixtureClient(),
-            onProgress: (report) => store.update(id, { report }),
+            onProgress: async (report) => {
+              store.values.get(id)!.report = structuredClone(report);
+            },
           }),
         );
       },
-    });
+    };
+    const app = createApp(options);
     const server = app.listen(0, "127.0.0.1");
     await new Promise<void>((resolve) => server.once("listening", resolve));
     const address = server.address() as any,
       origin = `http://127.0.0.1:${address.port}`;
+    options.publicOrigin = origin;
     const browser = await chromium.launch();
     try {
       const page = await browser.newPage({
         viewport: { width: 1440, height: 1050 },
       });
       await page.goto(origin);
-      await page.getByLabel("Chiave di accesso agenzia").fill(key);
+      await page.getByLabel("Email").fill("owner@example.com");
+      await page.getByLabel("Password", { exact: true }).fill(testPassword);
       await page.getByRole("button", { name: "Entra nel workspace →" }).click();
       await page
         .getByRole("button", { name: "Crea il primo report →" })
@@ -53,7 +67,10 @@ test(
       await page
         .getByLabel("Nome cliente")
         .fill("Aurora Studio · esempio di test");
-      await page.getByLabel("La tua agenzia").fill("Studio Forma");
+      assert.equal(
+        await page.getByLabel("La tua agenzia").inputValue(),
+        "Studio Forma",
+      );
       await page.getByLabel("Pagine da verificare").selectOption("1");
       await page.getByRole("checkbox").check();
       await page.getByRole("button", { name: "Avvia la verifica →" }).click();

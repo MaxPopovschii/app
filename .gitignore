@@ -14,3 +14,7 @@ artifacts/
 test-results/
 .env.*
 !.env.example
+
+.secrets/
+backups/
+.restore/

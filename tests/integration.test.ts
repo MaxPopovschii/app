@@ -1,87 +1,144 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import mongoose from "mongoose";
 import amqp from "amqplib";
-import request from "supertest";
-import { mongoStore, AuditModel } from "@launchcheck/shared";
-import { createApp } from "../api/src/app";
-import { runAudit } from "../worker/dist/audit";
-import { fixtureClient } from "./helpers";
+import {
+  mongoStore,
+  AuditModel,
+  AgencyModel,
+  CapacityModel,
+  UsageModel,
+  UserModel,
+  SessionModel,
+  provisionAccount,
+  mongoIdentity,
+  purgeReports,
+  secret,
+  createFetcherClient,
+} from "@launchcheck/shared";
+import { report, stored, testPassword } from "./helpers";
 test(
-  "MongoDB persists the submitted report and RabbitMQ delivers the audit for real browser processing",
-  { skip: process.env.INTEGRATION_TESTS !== "1", timeout: 90_000 },
+  "replica-set transactions prevent overbooking and double release; retention retries safely",
+  { skip: process.env.INTEGRATION_TESTS !== "1", timeout: 120000 },
   async () => {
-    const dir = await mkdtemp(
-      path.join(os.tmpdir(), "launchcheck-integration-"),
-    );
-    const connection = await amqp.connect(process.env.RABBIT_URL!);
-    const channel = await connection.createConfirmChannel();
-    const queue = "launchcheck.test." + randomUUID(),
-      key = "integration-test-only-access-32-characters";
-    let id: string | undefined;
+    await mongoose.connect(secret("MONGO_URI"));
+    const agencyId = randomUUID(),
+      email = randomUUID() + "@example.com";
+    const queue = "launchcheck.test." + randomUUID();
+    let connection: any, channel: any;
     try {
-      await mongoose.connect(process.env.MONGO_URI!);
-      await channel.assertQueue(queue, { autoDelete: true });
-      const app = createApp({
-        store: mongoStore,
-        adminToken: key,
-        artifactDir: dir,
-        enqueue: async (reportId) => {
-          channel.sendToQueue(
-            queue,
-            Buffer.from(JSON.stringify({ id: reportId })),
-            { persistent: true },
-          );
-          await channel.waitForConfirms();
-        },
+      await Promise.all([
+        AuditModel.init(),
+        AgencyModel.init(),
+        UsageModel.init(),
+        CapacityModel.init(),
+        UserModel.init(),
+        SessionModel.init(),
+      ]);
+      await CapacityModel.updateOne(
+        { id: "global" },
+        { $setOnInsert: { active: 0, limit: 12 } },
+        { upsert: true },
+      );
+      await AgencyModel.create({
+        id: agencyId,
+        name: "Transaction fixture",
+        concurrencyLimit: 2,
+        dailyLimit: 3,
       });
-      const created = await request(app)
-        .post("/api/reports")
-        .set("Authorization", "Bearer " + key)
-        .send({
-          url: "https://fixture.example/",
-          client: "Fixture",
-          agency: "Integration",
-          maxPages: 1,
-          authorized: true,
-        })
-        .expect(202);
-      id = created.body.id;
-      assert.equal((await mongoStore.get(id!))?.report.status, "queued");
+      const account = await provisionAccount({
+        agencyId,
+        agency: "Fixture",
+        email,
+        name: "Fixture",
+        password: testPassword,
+      });
+      assert.equal(
+        (await mongoIdentity.userByEmail(email))!.agencyId,
+        agencyId,
+      );
+      const docs = Array.from({ length: 8 }, () => stored(report(), agencyId));
+      const outcomes = await Promise.allSettled(
+        docs.map((d) => mongoStore.reserve(d)),
+      );
+      assert.equal(outcomes.filter((o) => o.status === "fulfilled").length, 2);
+      assert.equal((await AgencyModel.findOne({ id: agencyId })).active, 2);
+      const admitted = await AuditModel.find({ agencyId }).lean();
+      for (const d of admitted) {
+        const r = d.report as any;
+        r.status = "complete";
+        await Promise.all([
+          mongoStore.finish(String(d.id), r),
+          mongoStore.finish(String(d.id), r),
+        ]);
+      }
+      assert.equal((await AgencyModel.findOne({ id: agencyId })).active, 0);
+      const extra = stored(report(), agencyId);
+      await mongoStore.reserve(extra);
+      extra.report.status = "complete";
+      await mongoStore.finish(extra.id, extra.report);
+      await assert.rejects(
+        () => mongoStore.reserve(stored(report(), agencyId)),
+        /giornaliero/,
+      );
+      assert.equal(await mongoStore.get(extra.id, "different-agency"), null);
+      await AuditModel.updateOne(
+        { id: extra.id },
+        { $set: { shareExpiresAt: new Date(0) } },
+      );
+      assert.equal(await mongoStore.getByShare(extra.shareHash), null);
+      await mongoStore.requestDeletion(extra.id, agencyId);
+      assert.equal(await mongoStore.get(extra.id, agencyId), null);
+      await assert.rejects(() =>
+        purgeReports("/tmp", async () => {
+          throw new Error("disk unavailable");
+        }),
+      );
+      assert.ok(await AuditModel.exists({ id: extra.id }));
+      let cleaned = false;
+      await purgeReports("/tmp", async () => {
+        cleaned = true;
+      });
+      assert.ok(cleaned);
+      assert.equal(await AuditModel.exists({ id: extra.id }), null);
+      connection = await amqp.connect(secret("RABBIT_URL"));
+      channel = await connection.createConfirmChannel();
+      await channel.assertQueue(queue, { autoDelete: true });
+      channel.sendToQueue(queue, Buffer.from(account.id), { persistent: true });
+      await channel.waitForConfirms();
       const message = await channel.get(queue, { noAck: false });
       assert.ok(message);
-      assert.equal(JSON.parse(message.content.toString()).id, id);
-      const doc = (await mongoStore.get(id!))!;
-      await runAudit(doc.report, {
-        artifactDir: dir,
-        client: fixtureClient(),
-        onProgress: (report) => mongoStore.update(id!, { report }),
-      });
+      assert.equal(message.content.toString(), account.id);
       channel.ack(message);
-      const restored = (await mongoStore.get(id!))!;
-      assert.equal(restored.report.status, "complete");
-      assert.equal(restored.report.pages.length, 2);
-      const token = created.body.sharePath.split("/").pop();
-      const shared = await request(app)
-        .get("/api/share/" + token)
-        .expect(200);
-      assert.ok(shared.body.findings.length > 0);
-      const asset = restored.report.pages[0].screenshot!;
-      const image = await request(app)
-        .get(`/api/share/${token}/assets/${asset}`)
-        .expect(200);
-      assert.match(image.headers["content-type"], /image\/png/);
+      const fetcher = createFetcherClient(
+        "http://fetcher:8081",
+        secret("FETCHER_TOKEN"),
+      );
+      await assert.rejects(
+        () => fetcher("http://127.0.0.1/"),
+        /fetch|request|Fetch|Destination/i,
+      );
     } finally {
-      if (id) await AuditModel.deleteOne({ id });
-      await channel.deleteQueue(queue);
-      await channel.close();
-      await connection.close();
+      if (channel) {
+        await channel.deleteQueue(queue);
+        await channel.close();
+      }
+      if (connection) await connection.close();
+      // Release any remaining reservation before removing fixtures, even on assertion failure.
+      for (const d of await AuditModel.find({
+        agencyId,
+        quotaReleased: false,
+      }).lean()) {
+        const r = d.report as any;
+        r.status = "failed";
+        await mongoStore.finish(String(d.id), r);
+      }
+      await AuditModel.deleteMany({ agencyId });
+      await UsageModel.deleteMany({ agencyId });
+      await UserModel.deleteMany({ agencyId });
+      await AgencyModel.deleteOne({ id: agencyId });
       await mongoose.disconnect();
-      await rm(dir, { recursive: true, force: true });
     }
   },
 );

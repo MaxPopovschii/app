@@ -18,8 +18,15 @@
         ▦ <span>Report dei clienti</span
         ><span class="counter">{{ reports.length }}</span>
       </button>
-      <button class="nav-item" @click="openForm = true" :disabled="!connected">
+      <button
+        class="nav-item"
+        @click="openForm = true"
+        :disabled="!canEdit || !ready"
+      >
         ＋ <span>Nuova verifica</span>
+      </button>
+      <button v-if="connected" class="nav-item" @click="openAccount = true">
+        ◎ <span>Il mio account</span>
       </button>
       <div class="sidebar-footer">
         <span class="status-dot"></span> Verifiche con prove, non
@@ -45,6 +52,14 @@
           }}<button aria-label="Chiudi errore" @click="error = ''">×</button>
         </div>
         <div v-if="toast" role="status" class="notice">{{ toast }}</div>
+        <div
+          v-if="connected && !ready"
+          role="status"
+          class="notice warning no-print"
+        >
+          Nuove verifiche temporaneamente sospese. I report esistenti restano
+          consultabili.
+        </div>
         <section v-if="!isPublic && !connected" class="login-panel">
           <div class="eyebrow">DAL CONTROLLO ALLA CONSEGNA</div>
           <h1>Consegna siti.<br /><em>Non sorprese.</em></h1>
@@ -53,22 +68,31 @@
             il cliente un report che racconta il tuo lavoro.
           </p>
           <form @submit.prevent="connect">
-            <label for="access">Chiave di accesso agenzia</label
+            <label for="email">Email</label
             ><input
-              id="access"
-              v-model="accessInput"
+              id="email"
+              v-model="emailInput"
+              type="email"
+              autocomplete="username"
+              required
+              maxlength="254"
+              placeholder="nome@agenzia.it"
+            />
+            <label for="password">Password</label
+            ><input
+              id="password"
+              v-model="passwordInput"
               type="password"
               autocomplete="current-password"
-              placeholder="Inserisci la chiave del tuo workspace"
               required
-              minlength="32"
+              maxlength="128"
             /><button class="primary" :disabled="busy">
               {{ busy ? "Connessione…" : "Entra nel workspace →" }}
             </button>
           </form>
           <small
-            >La chiave resta nella sessione di questo browser. I link dei report
-            hanno un accesso separato e revocabile.</small
+            >Accedi con il tuo account personale. I link dei report hanno un
+            accesso separato, scadono e possono essere revocati.</small
           >
         </section>
         <template v-else-if="!report && !isPublic">
@@ -80,7 +104,12 @@
                 I report dei tuoi clienti, le prove e il prossimo intervento.
               </p>
             </div>
-            <button class="primary" @click="openForm = true">
+            <button
+              v-if="canEdit"
+              class="primary"
+              @click="openForm = true"
+              :disabled="!ready"
+            >
               ＋ Nuova verifica
             </button>
           </div>
@@ -118,7 +147,12 @@
                 pubbliche in due formati e raccogliamo le prove in un unico
                 report.
               </p>
-              <button class="primary" @click="openForm = true">
+              <button
+                v-if="canEdit"
+                class="primary"
+                @click="openForm = true"
+                :disabled="!ready"
+              >
                 Crea il primo report →
               </button>
             </div>
@@ -162,19 +196,29 @@
             </button>
             <div class="actions-right">
               <button
-                v-if="!isPublic && finished"
+                v-if="!isPublic && canEdit && finished"
                 @click="repeatReport"
                 class="secondary"
               >
                 Ripeti e confronta</button
-              ><button v-if="!isPublic" @click="shareReport" class="secondary">
+              ><button
+                v-if="!isPublic && canEdit"
+                @click="shareReport"
+                class="secondary"
+              >
                 Crea nuovo link ↗</button
               ><button
-                v-if="!isPublic"
+                v-if="!isPublic && canEdit"
                 @click="revokeShare"
                 class="text-button"
               >
                 Revoca link</button
+              ><button
+                v-if="!isPublic && canEdit && finished"
+                @click="deleteConfirm = true"
+                class="text-button danger"
+              >
+                Elimina report</button
               ><button v-if="finished" @click="printReport" class="primary">
                 Stampa / PDF
               </button>
@@ -329,9 +373,7 @@
                   {{ finding.title }} <span>↗</span>
                 </button>
                 <div class="finding-location">
-                  {{
-                    finding.viewport === "mobile" ? "▯ Mobile" : "▰ Desktop"
-                  }}
+                  {{ finding.viewport === "mobile" ? "▯ Mobile" : "▰ Desktop" }}
                   · {{ displayPath(finding.url) }}
                 </div>
                 <p>{{ finding.detail }}</p>
@@ -344,7 +386,7 @@
                   <button class="text-button" @click="showEvidence(finding)">
                     Vedi prova →</button
                   ><select
-                    v-if="!isPublic && finished"
+                    v-if="!isPublic && canEdit && finished"
                     :value="finding.status"
                     @change="
                       updateFinding(
@@ -381,13 +423,11 @@
                 <EvidenceImage
                   v-if="selectedPage.screenshot"
                   :url="assetUrl(selectedPage.screenshot)"
-                  :token="isPublic ? undefined : token"
                   alt="Screenshot della pagina verificata" /><template
                   v-if="selectedPage.diffScreenshot"
                   ><h3 class="diff-heading">Differenze dalla baseline</h3>
                   <EvidenceImage
                     :url="assetUrl(selectedPage.diffScreenshot)"
-                    :token="isPublic ? undefined : token"
                     alt="Differenze visive evidenziate rispetto alla baseline" /></template
               ></template>
               <p v-else class="muted">
@@ -438,12 +478,19 @@
               <h3>{{ page.viewport }} · {{ page.url }}</h3>
               <EvidenceImage
                 :url="assetUrl(page.screenshot!)"
-                :token="isPublic ? undefined : token"
                 alt="Screenshot della pagina verificata"
               />
             </article>
           </section>
           <section class="methodology">
+            <p v-if="report.retentionUntil">
+              Conservazione del report fino al
+              {{ formatDate(report.retentionUntil) }}.
+              <span v-if="report.shareExpiresAt"
+                >Link condiviso valido fino al
+                {{ formatDate(report.shareExpiresAt) }}.</span
+              >
+            </p>
             <h2>Come leggere questo report</h2>
             <p>
               Le segnalazioni automatiche descrivono comportamenti osservati,
@@ -468,7 +515,7 @@
       </div>
     </main>
     <div
-      v-if="openForm && connected && !isPublic"
+      v-if="openForm && canEdit && !isPublic"
       class="modal-backdrop no-print"
       @click.self="openForm = false"
     >
@@ -514,6 +561,7 @@
               ><input
                 id="agency"
                 v-model="agency"
+                readonly
                 maxlength="100"
                 required
                 placeholder="Il tuo studio"
@@ -559,6 +607,85 @@
         </form>
       </section>
     </div>
+    <div
+      v-if="openAccount"
+      class="modal-backdrop no-print"
+      @click.self="openAccount = false"
+    >
+      <section
+        class="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="account-title"
+      >
+        <button
+          class="modal-close"
+          @click="openAccount = false"
+          aria-label="Chiudi account"
+        >
+          ×
+        </button>
+        <h2 id="account-title">Il mio account</h2>
+        <p>{{ user?.name }} · {{ user?.email }} · {{ user?.role }}</p>
+        <p>
+          La tua agenzia: {{ agency }}. Conservazione report:
+          {{ user?.agency.retentionDays }} giorni. Link condivisi:
+          {{ user?.agency.shareDays }} giorni.
+        </p>
+        <p v-if="error" role="alert" class="form-error">{{ error }}</p>
+        <form @submit.prevent="changePassword">
+          <label for="current-password">Password attuale</label
+          ><input
+            id="current-password"
+            v-model="currentPassword"
+            type="password"
+            autocomplete="current-password"
+            required
+          /><label for="new-password">Nuova password</label
+          ><input
+            id="new-password"
+            v-model="newPassword"
+            type="password"
+            autocomplete="new-password"
+            minlength="15"
+            maxlength="128"
+            required
+          />
+          <p>
+            Da 15 a 128 caratteri. Il cambio revoca tutte le sessioni
+            dell’account.
+          </p>
+          <button class="primary" :disabled="busy">
+            Aggiorna password e disconnetti
+          </button>
+        </form>
+      </section>
+    </div>
+    <div
+      v-if="deleteConfirm && report"
+      class="modal-backdrop no-print"
+      @click.self="deleteConfirm = false"
+    >
+      <section
+        class="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-title"
+      >
+        <h2 id="delete-title">Eliminare il report di {{ report.client }}?</h2>
+        <p>
+          Il report e i link condivisi diventano subito inaccessibili. Il worker
+          rimuove dati e screenshot nel successivo ciclo di pulizia. Eventuali
+          copie nei backup seguono la conservazione dei backup.
+        </p>
+        <button class="secondary" @click="deleteConfirm = false">
+          Annulla
+        </button>
+        <button class="primary" @click="deleteReport" :disabled="busy">
+          Elimina definitivamente
+        </button>
+      </section>
+    </div>
   </div>
 </template>
 <script setup lang="ts">
@@ -579,10 +706,34 @@ type Summary = Omit<
 const sharedToken = window.location.pathname.match(
   /^\/report\/([A-Za-z0-9_-]{43})$/,
 )?.[1];
-const isPublic = window.location.pathname.startsWith("/report/"),
-  token = ref(sessionStorage.getItem("launchcheck-token") || "");
+const isPublic = window.location.pathname.startsWith("/report/");
+interface Account {
+  id: string;
+  email: string;
+  name: string;
+  role: "owner" | "member" | "viewer";
+  agency: {
+    id: string;
+    name: string;
+    retentionDays: number;
+    shareDays: number;
+    dailyLimit: number;
+    concurrencyLimit: number;
+  };
+}
+const user = ref<Account | null>(null),
+  csrfToken = ref(""),
+  ready = ref(true),
+  openAccount = ref(false),
+  deleteConfirm = ref(false),
+  currentPassword = ref(""),
+  newPassword = ref("");
+const canEdit = computed(
+  () => connected.value && user.value?.role !== "viewer",
+);
 const connected = ref(false),
-  accessInput = ref(""),
+  emailInput = ref(""),
+  passwordInput = ref(""),
   busy = ref(false),
   error = ref(""),
   toast = ref("");
@@ -696,7 +847,7 @@ async function api(path: string, options: RequestInit = {}) {
     signal: controller.signal,
     headers: {
       "Content-Type": "application/json",
-      ...(isPublic ? {} : { Authorization: "Bearer " + token.value }),
+      ...(csrfToken.value ? { "X-CSRF-Token": csrfToken.value } : {}),
       ...options.headers,
     },
   });
@@ -714,25 +865,82 @@ async function loadReports() {
 }
 async function connect() {
   busy.value = true;
-  token.value = accessInput.value;
   error.value = "";
   try {
-    await loadReports();
-    sessionStorage.setItem("launchcheck-token", token.value);
-    accessInput.value = "";
+    const data = await api("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({
+        email: emailInput.value,
+        password: passwordInput.value,
+      }),
+    });
+    user.value = data.user;
+    csrfToken.value = data.csrfToken;
+    agency.value = data.user.agency.name;
     connected.value = true;
-  } catch {
-    token.value = "";
+    await loadReports();
+    await checkReady();
+  } catch (err: any) {
+    error.value = err.message;
   } finally {
+    passwordInput.value = "";
     busy.value = false;
   }
 }
-function logout() {
-  sessionStorage.removeItem("launchcheck-token");
-  token.value = "";
+async function logout() {
+  try {
+    if (connected.value) await api("/api/auth/logout", { method: "POST" });
+  } catch {}
+  user.value = null;
+  csrfToken.value = "";
   connected.value = false;
   report.value = null;
   reports.value = [];
+  openAccount.value = false;
+  history.replaceState(null, "", "/");
+}
+async function checkReady() {
+  try {
+    const response = await fetch("/readyz", { signal: controller.signal });
+    ready.value = response.ok;
+  } catch {
+    ready.value = false;
+  }
+}
+async function changePassword() {
+  busy.value = true;
+  error.value = "";
+  try {
+    await api("/api/auth/password", {
+      method: "POST",
+      body: JSON.stringify({
+        currentPassword: currentPassword.value,
+        newPassword: newPassword.value,
+      }),
+    });
+    await logout();
+    toast.value = "Password aggiornata. Accedi di nuovo.";
+  } catch (err: any) {
+    error.value = err.message;
+  } finally {
+    currentPassword.value = "";
+    newPassword.value = "";
+    busy.value = false;
+  }
+}
+async function deleteReport() {
+  if (!report.value) return;
+  busy.value = true;
+  try {
+    await api("/api/reports/" + report.value.id, { method: "DELETE" });
+    deleteConfirm.value = false;
+    goHome();
+    toast.value = "Report eliminato. Link revocati; pulizia dei file in corso.";
+  } catch (err: any) {
+    error.value = err.message;
+  } finally {
+    busy.value = false;
+  }
 }
 async function selectReport(id: string) {
   error.value = "";
@@ -750,6 +958,8 @@ function goHome() {
   report.value = null;
   selectedPage.value = null;
   shareUrl.value = "";
+  toast.value = "";
+  error.value = "";
   history.replaceState(null, "", "/");
   if (connected.value) loadReports().catch(() => {});
 }
@@ -875,9 +1085,11 @@ watch(openForm, async (open) => {
   } else previousFocus?.focus();
 });
 function handleKeyboard(event: KeyboardEvent) {
-  if (!openForm.value) return;
+  if (!openForm.value && !openAccount.value && !deleteConfirm.value) return;
   if (event.key === "Escape") {
     openForm.value = false;
+    openAccount.value = false;
+    deleteConfirm.value = false;
     return;
   }
   if (event.key !== "Tab") return;
@@ -903,11 +1115,22 @@ onMounted(async () => {
       report.value = await api("/api/share/" + sharedToken);
       selectedPage.value =
         report.value?.pages.find((p) => p.screenshot) || null;
-    } else if (token.value) {
-      await loadReports();
-      connected.value = true;
-      const id = new URLSearchParams(location.search).get("report");
-      if (id) await selectReport(id);
+    } else {
+      sessionStorage.removeItem("launchcheck-token");
+      const response = await fetch("/api/auth/session", {
+        signal: controller.signal,
+      });
+      if (response.ok) {
+        const data = await response.json();
+        user.value = data.user;
+        csrfToken.value = data.csrfToken;
+        agency.value = data.user.agency.name;
+        connected.value = true;
+        await loadReports();
+        await checkReady();
+        const id = new URLSearchParams(location.search).get("report");
+        if (id) await selectReport(id);
+      }
     }
   } catch (err: any) {
     error.value = err.message;
@@ -916,6 +1139,7 @@ onMounted(async () => {
     if (polling) return;
     polling = true;
     try {
+      if (connected.value) await checkReady();
       if (report.value && !finished.value) {
         const selectedUrl = selectedPage.value?.url,
           selectedViewport = selectedPage.value?.viewport;

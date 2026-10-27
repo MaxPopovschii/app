@@ -15,18 +15,6 @@ jobs:
     container: mcr.microsoft.com/playwright:v1.57.0-noble
     env:
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
-    services:
-      mongo:
-        image: mongo:7
-        ports: [27017:27017]
-        options: --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping:1})'" --health-interval 10s --health-timeout 5s --health-retries 10
-      rabbit:
-        image: rabbitmq:3.13-alpine
-        env:
-          RABBITMQ_DEFAULT_USER: test
-          RABBITMQ_DEFAULT_PASS: test
-        ports: [5672:5672]
-        options: --health-cmd "rabbitmq-diagnostics -q ping" --health-interval 10s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,12 +22,7 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
-      - run: npm run build
       - run: npm test
-        env:
-          INTEGRATION_TESTS: "1"
-          MONGO_URI: mongodb://mongo:27017/launchcheck_ci
-          RABBIT_URL: amqp://test:test@rabbit:5672
       - run: npm audit --omit=dev --audit-level=high
       - uses: actions/upload-artifact@v4
         if: always()
@@ -51,34 +34,43 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Validate and boot both application images
-        env:
-          ADMIN_TOKEN: ci-only-access-key-with-at-least-32-characters
-          RABBIT_PASSWORD: ci-only-local-broker
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Boot authenticated services and check readiness
         run: |
+          node ops/generate-secrets.mjs
           docker compose config --quiet
+          DOMAIN=example.com ACME_EMAIL=ops@example.com docker compose -f docker-compose.yml -f compose.production.yml config --quiet
+          docker compose -f docker-compose.yml -f compose.monitoring.yml config --quiet
           docker compose up --build -d --wait
           for attempt in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:8080/healthz; then break; fi
+            if curl --fail --silent http://127.0.0.1:8080/readyz; then break; fi
             sleep 2
           done
-          curl --fail --silent http://127.0.0.1:8080/healthz
-          curl --fail --silent -H "Authorization: Bearer $ADMIN_TOKEN" http://127.0.0.1:8080/api/reports
+          curl --fail --silent http://127.0.0.1:8080/readyz
           test "$(curl --silent -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/reports)" = 401
-          for attempt in $(seq 1 30); do
-            if docker compose logs worker | grep 'Worker pronto'; then break; fi
-            sleep 2
-          done
-          docker compose logs worker | grep 'Worker pronto'
+      - name: Transaction, browser, queue and fetcher integration
+        run: docker compose -f docker-compose.yml -f compose.test.yml run --build --rm test
+      - name: Verify worker has no direct Internet or host-gateway route
+        run: |
+          docker compose exec -T worker node -e "fetch('https://example.com',{signal:AbortSignal.timeout(3000)}).then(()=>process.exit(1)).catch(()=>console.log('Direct external network blocked'))"
+          docker compose exec -T worker node -e "const os=require('os');const a=Object.values(os.networkInterfaces()).flat().filter(x=>x.family==='IPv4'&&!x.internal);if(a.length!==2)process.exit(1)"
+      - name: Validate operations configuration and encrypted recovery drill
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y age
+          age-keygen -o /tmp/recovery.key 2>/tmp/recovery.pub
+          recipient=$(age-keygen -y /tmp/recovery.key)
+          python3 ops/recovery.py backup --recipient "$recipient" --output /tmp/launchcheck.age
+          python3 ops/recovery.py restore --identity /tmp/recovery.key --input /tmp/launchcheck.age
+          docker compose stop api worker
+          python3 ops/recovery.py restore --identity /tmp/recovery.key --input /tmp/launchcheck.age --apply --maintenance-confirmed
+          docker compose start api worker
+          docker run --rm --entrypoint promtool -v "$PWD/ops:/etc/prometheus:ro" prom/prometheus:v3.2.1 check rules /etc/prometheus/alerts.yml
+          docker run --rm -e DOMAIN=example.com -e ACME_EMAIL=ops@example.com -v "$PWD/ops/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.10-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
       - name: Container diagnostics
         if: failure()
-        env:
-          ADMIN_TOKEN: ci-only-access-key-with-at-least-32-characters
-          RABBIT_PASSWORD: ci-only-local-broker
-        run: docker compose logs --tail 100
+        run: docker compose logs --tail 60
       - name: Stop containers
         if: always()
-        env:
-          ADMIN_TOKEN: ci-only-access-key-with-at-least-32-characters
-          RABBIT_PASSWORD: ci-only-local-broker
         run: docker compose down --volumes

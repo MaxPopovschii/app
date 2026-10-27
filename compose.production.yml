@@ -1,0 +1,26 @@
+services:
+  api:
+    ports: !reset []
+    environment:
+      PUBLIC_ORIGIN: https://${DOMAIN:?Set DOMAIN}
+      COOKIE_SECURE: "true"
+      TRUST_PROXY_HOPS: "1"
+  proxy:
+    image: caddy:2.10-alpine
+    ports: ["80:80", "443:443", "443:443/udp"]
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL}
+    volumes:
+      [
+        ./ops/Caddyfile:/etc/caddy/Caddyfile:ro,
+        caddy-data:/data,
+        caddy-config:/config,
+      ]
+    networks: [frontend]
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
+volumes:
+  caddy-data:
+  caddy-config:

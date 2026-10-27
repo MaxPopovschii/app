@@ -1,0 +1,29 @@
+groups:
+  - name: launchcheck
+    rules:
+      - alert: LaunchCheckUnavailable
+        expr: up{job="launchcheck"} == 0 or launchcheck_ready == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          {
+            summary: "LaunchCheck cannot accept scans; inspect readiness and service logs",
+          }
+      - alert: LaunchCheckWorkerDown
+        expr: launchcheck_worker_up == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations: { summary: "No healthy audit worker" }
+      - alert: LaunchCheckQueueStalled
+        expr: launchcheck_stale_queued_reports > 0
+        for: 2m
+        labels: { severity: warning }
+        annotations: { summary: "Reports have waited more than ten minutes" }
+      - alert: LaunchCheckScanFailures
+        expr: launchcheck_recent_failed_reports >= 3
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          {
+            summary: "At least three failed reports in the last fifteen minutes",
+          }

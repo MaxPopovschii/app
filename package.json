@@ -6,13 +6,15 @@
     "shared",
     "api",
     "worker",
-    "web"
+    "web",
+    "fetcher"
   ],
   "scripts": {
-    "build": "npm run build -w shared && npm run build -w api && npm run build -w worker && npm run build:check -w web",
+    "build": "npm run build -w shared && npm run build -w api && npm run build -w fetcher && npm run build -w worker && npm run build:check -w web",
     "test": "npm run build && tsx --test tests/*.test.ts",
     "start": "npm run start -w api",
-    "dev:web": "npm run dev -w web"
+    "dev:web": "npm run dev -w web",
+    "provision": "node api/dist/provision.js"
   },
   "devDependencies": {
     "tsx": "^4.20.6",
