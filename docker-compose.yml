@@ -47,7 +47,7 @@ services:
     restart: unless-stopped
   mongo-init:
     image: mongo:7
-    entrypoint: [mongosh, --quiet, /mongo-init.js]
+    entrypoint: [mongosh, --nodb, --quiet, /mongo-init.js]
     volumes:
       [mongo-secrets:/run/launchcheck:ro, ./ops/mongo-init.js:/mongo-init.js:ro]
     networks: [backend]
