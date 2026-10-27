@@ -1,19 +1,24 @@
 {
-  "name": "mini-crawler",
-  "version": "1.0.0",
+  "name": "launchcheck",
   "private": true,
+  "version": "0.1.0",
   "workspaces": [
+    "shared",
     "api",
-    "web",
-    "worker"
+    "worker",
+    "web"
   ],
   "scripts": {
-    "build-frontend": "cd web && yarn install && yarn build && rm -rf ../api/public && cp -r dist ../api/public",
-    "build-all": "yarn build-frontend && cd api && yarn install && yarn build && cd ../worker && yarn install && yarn build",
-    "test:e2e": "node scripts/e2e-test.js"
+    "build": "npm run build -w shared && npm run build -w api && npm run build -w worker && npm run build:check -w web",
+    "test": "npm run build && tsx --test tests/*.test.ts",
+    "start": "npm run start -w api",
+    "dev:web": "npm run dev -w web"
   },
   "devDependencies": {
-    "@express-rate-limit/tsconfig": "^1.0.2",
-    "node-fetch": "^3.3.2"
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "@types/node": "^22.18.0",
+    "@types/supertest": "^6.0.3",
+    "supertest": "^7.1.4"
   }
 }

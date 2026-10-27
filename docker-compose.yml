@@ -1,68 +1,63 @@
 services:
   mongo:
     image: mongo:7
-    container_name: crawler-mongo
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongo-data:/data/db
+    volumes: [mongo-data:/data/db]
+    networks: [backend]
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      test: [CMD, mongosh, --quiet, --eval, "db.adminCommand('ping')"]
       interval: 10s
       timeout: 5s
-      retries: 5
-
+      retries: 10
+    restart: unless-stopped
   rabbit:
-    image: rabbitmq:3-management
-    container_name: crawler-rabbit
-    ports:
-      - "5672:5672"
-      - "15672:15672"
+    image: rabbitmq:3.13-alpine
     environment:
-      - RABBITMQ_DEFAULT_USER=guest
-      - RABBITMQ_DEFAULT_PASS=guest
+      RABBITMQ_DEFAULT_USER: launchcheck
+      RABBITMQ_DEFAULT_PASS: ${RABBIT_PASSWORD:?Set RABBIT_PASSWORD in .env}
+    volumes: [rabbit-data:/var/lib/rabbitmq]
+    networks: [backend]
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      test: [CMD, rabbitmq-diagnostics, -q, ping]
       interval: 10s
       timeout: 5s
-      retries: 5
-
+      retries: 10
+    restart: unless-stopped
   api:
     build:
       context: .
-      dockerfile: Dockerfile.api
-    container_name: crawler-api
-    ports:
-      - "8080:8080"
+      target: api
+    ports: ["127.0.0.1:8080:8080"]
     environment:
-      - MONGO_URI=${MONGO_URI}
-      - RABBIT_URL=${RABBIT_URL}
-      - PORT=${PORT}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_MOCK=${OPENAI_MOCK}
+      MONGO_URI: mongodb://mongo:27017/launchcheck
+      RABBIT_URL: amqp://launchcheck:${RABBIT_PASSWORD}@rabbit:5672
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?Set ADMIN_TOKEN in .env}
+    volumes: [audit-artifacts:/data/artifacts:ro]
+    networks: [backend, frontend]
     depends_on:
-      mongo:
-        condition: service_healthy
-      rabbit:
-        condition: service_healthy
+      mongo: { condition: service_healthy }
+      rabbit: { condition: service_healthy }
     restart: unless-stopped
-
   worker:
     build:
       context: .
-      dockerfile: Dockerfile.worker
-    container_name: crawler-worker
+      target: worker
     environment:
-      - MONGO_URI=${MONGO_URI}
-      - RABBIT_URL=${RABBIT_URL}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_MOCK=${OPENAI_MOCK}
+      MONGO_URI: mongodb://mongo:27017/launchcheck
+      RABBIT_URL: amqp://launchcheck:${RABBIT_PASSWORD}@rabbit:5672
+    volumes: [audit-artifacts:/data/artifacts]
+    networks: [backend, egress]
+    shm_size: 256mb
+    mem_limit: 2g
+    cpus: 2
     depends_on:
-      mongo:
-        condition: service_healthy
-      rabbit:
-        condition: service_healthy
+      mongo: { condition: service_healthy }
+      rabbit: { condition: service_healthy }
     restart: unless-stopped
-
+networks:
+  backend: { internal: true }
+  egress: {}
+  frontend: {}
 volumes:
   mongo-data:
+  rabbit-data:
+  audit-artifacts:
