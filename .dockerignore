@@ -7,3 +7,5 @@
 artifacts
 test-results
 coverage
+
+**/.env*

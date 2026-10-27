@@ -37,16 +37,22 @@ export function createApp(options: AppOptions) {
   }));
   app.use('/api/reports', authorize);
   app.get('/api/reports', wrap(async (_req, res) => {
-    res.json((await store.list()).map(({ pages, findings, resolvedSinceBaseline, ...report }) => ({ ...report, findingCount: findings.length, highCount: findings.filter(f => f.severity === 'high' && f.status === 'open').length })));
+    res.json((await store.list()).map(({ pages, findings, resolvedSinceBaseline, logo, ...report }) => ({ ...report, findingCount: findings.length, highCount: findings.filter(f => f.severity === 'high' && f.status === 'open').length })));
   }));
   app.post('/api/reports', rateLimit({ windowMs: 3_600_000, limit: 10, standardHeaders: 'draft-7', legacyHeaders: false }), wrap(async (req, res) => {
-    const { url, agency, client, logo, maxPages = 5, baselineId, authorized } = req.body;
+    const { url, agency, client, logo, maxPages = 5, baselineId, authorized } = req.body || {};
     let target: URL;
     try { target = normalizeTarget(typeof url === 'string' ? url : ''); } catch (err: any) { return res.status(400).json({ error: err.message }); }
     if (authorized !== true) return res.status(400).json({ error: 'Conferma di essere autorizzato a verificare il sito' });
     if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 10) return res.status(400).json({ error: 'Scegli da 1 a 10 pagine' });
     if (![agency, client].every(v => typeof v === 'string' && v.trim().length > 0 && v.length <= 100)) return res.status(400).json({ error: 'Agenzia e cliente sono obbligatori (massimo 100 caratteri)' });
     if (logo !== undefined && (typeof logo !== 'string' || !/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(logo) || logo.length > 280_000)) return res.status(400).json({ error: 'Il logo deve essere PNG/JPEG e inferiore a 200 KB' });
+    if (logo) {
+      const bytes = Buffer.from(logo.split(',')[1], 'base64');
+      const png = bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]));
+      const jpeg = bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
+      if (bytes.length > 200_000 || !(png || jpeg)) return res.status(400).json({ error: 'Logo raster non valido o troppo grande' });
+    }
     if (baselineId) {
       if (typeof baselineId !== 'string') return res.status(400).json({ error: 'Baseline non valida' });
       const baseline = (await store.get(baselineId))?.report;
@@ -76,9 +82,9 @@ export function createApp(options: AppOptions) {
   app.patch('/api/reports/:id/findings/:findingId', wrap(async (req, res) => {
     const doc = await store.get(req.params.id); if (!doc) return res.status(404).end();
     if (!isFinished(doc.report.status)) return res.status(409).json({ error: 'Attendi la fine della scansione' });
-    if (!['open', 'resolved', 'ignored'].includes(req.body.status)) return res.status(400).json({ error: 'Stato non valido' });
+    if (!['open', 'resolved', 'ignored'].includes(req.body?.status)) return res.status(400).json({ error: 'Stato non valido' });
     const finding = doc.report.findings.find(f => f.id === req.params.findingId); if (!finding) return res.status(404).end();
-    finding.status = req.body.status; doc.report.updatedAt = new Date().toISOString(); await store.update(doc.id, { report: doc.report }); res.json(doc.report);
+    finding.status = req.body?.status; doc.report.updatedAt = new Date().toISOString(); await store.update(doc.id, { report: doc.report }); res.json(doc.report);
   }));
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Endpoint non trovato' }));
   if (options.webDir) { app.use(express.static(options.webDir, { index: false })); app.get('*', (_req, res) => res.sendFile(path.join(options.webDir!, 'index.html'))); }

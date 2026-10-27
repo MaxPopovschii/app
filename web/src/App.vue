@@ -44,11 +44,11 @@
         <section v-else class="empty"><h1>{{ error ? 'Report non disponibile' : 'Caricamento report…' }}</h1></section>
       </div>
     </main>
-    <div v-if="openForm && connected && !isPublic" class="modal-backdrop no-print" @click.self="openForm = false"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="new-report-title"><button class="modal-close" @click="openForm = false" aria-label="Chiudi">×</button><div class="eyebrow">UNA NUOVA CONSEGNA</div><h2 id="new-report-title">Prima le prove.<br/>Poi il via libera.</h2><p>Una verifica delle pagine pubbliche, su desktop e mobile.</p><form @submit.prevent="createReport"><label for="target">Sito del cliente</label><input id="target" v-model="target" type="url" placeholder="https://cliente.it" required/><div class="form-grid"><div><label for="client">Nome cliente</label><input id="client" v-model="client" maxlength="100" required placeholder="Studio Aurora"/></div><div><label for="agency">La tua agenzia</label><input id="agency" v-model="agency" maxlength="100" required placeholder="Il tuo studio"/></div></div><div class="form-grid"><div><label for="max-pages">Pagine da verificare</label><select id="max-pages" v-model.number="maxPages"><option :value="1">1 pagina · 2 viste</option><option :value="5">Fino a 5 pagine · 10 viste</option><option :value="10">Fino a 10 pagine · 20 viste</option></select></div><div><label for="logo">Logo nel report</label><input id="logo" type="file" accept="image/png,image/jpeg" @change="loadLogo"/><small>PNG/JPEG · massimo 200 KB</small></div></div><label for="baseline">Confronta con una baseline</label><select id="baseline" v-model="baselineId"><option value="">Nessun confronto</option><option v-for="item in baselines" :key="item.id" :value="item.id">{{ item.client }} · {{ formatDate(item.createdAt) }}</option></select><label class="checkbox"><input v-model="authorized" type="checkbox" required/><span>Confermo di essere autorizzato a verificare questo sito e a raccogliere gli screenshot delle pagine pubbliche.</span></label><button class="primary full-width" :disabled="busy">{{ busy ? 'Creazione…' : 'Avvia la verifica →' }}</button><small class="form-footnote">Massimo 10 pagine dello stesso sito. Nessun invio di moduli o acquisto.</small></form></section></div>
+    <div v-if="openForm && connected && !isPublic" class="modal-backdrop no-print" @click.self="openForm = false"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="new-report-title"><button class="modal-close" @click="openForm = false" aria-label="Chiudi">×</button><div class="eyebrow">UNA NUOVA CONSEGNA</div><h2 id="new-report-title">Prima le prove.<br/>Poi il via libera.</h2><p>Una verifica delle pagine pubbliche, su desktop e mobile.</p><p v-if="error" role="alert" class="form-error">{{ error }}</p><form @submit.prevent="createReport"><label for="target">Sito del cliente</label><input id="target" v-model="target" type="url" placeholder="https://cliente.it" required/><div class="form-grid"><div><label for="client">Nome cliente</label><input id="client" v-model="client" maxlength="100" required placeholder="Studio Aurora"/></div><div><label for="agency">La tua agenzia</label><input id="agency" v-model="agency" maxlength="100" required placeholder="Il tuo studio"/></div></div><div class="form-grid"><div><label for="max-pages">Pagine da verificare</label><select id="max-pages" v-model.number="maxPages"><option :value="1">1 pagina · 2 viste</option><option :value="5">Fino a 5 pagine · 10 viste</option><option :value="10">Fino a 10 pagine · 20 viste</option></select></div><div><label for="logo">Logo nel report</label><input id="logo" type="file" accept="image/png,image/jpeg" @change="loadLogo"/><small>PNG/JPEG · massimo 200 KB</small></div></div><label for="baseline">Confronta con una baseline</label><select id="baseline" v-model="baselineId"><option value="">Nessun confronto</option><option v-for="item in baselines" :key="item.id" :value="item.id">{{ item.client }} · {{ formatDate(item.createdAt) }}</option></select><label class="checkbox"><input v-model="authorized" type="checkbox" required/><span>Confermo di essere autorizzato a verificare questo sito e a raccogliere gli screenshot delle pagine pubbliche.</span></label><button class="primary full-width" :disabled="busy">{{ busy ? 'Creazione…' : 'Avvia la verifica →' }}</button><small class="form-footnote">Massimo 10 pagine dello stesso sito. Nessun invio di moduli o acquisto.</small></form></section></div>
   </div>
 </template>
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
 import type { AuditReport, Finding, PageResult } from '@launchcheck/shared';
 import EvidenceImage from './EvidenceImage.vue';
 type Summary = Omit<AuditReport, 'pages' | 'findings' | 'resolvedSinceBaseline'> & { findingCount: number; highCount: number };
@@ -89,11 +89,26 @@ async function updateFinding(finding: Finding, status: string) { if (!report.val
 function assetUrl(file: string) { return isPublic ? `/api/share/${sharedToken}/assets/${file}` : `/api/reports/${report.value!.id}/assets/${file}`; }
 function printReport() { window.print(); }
 async function loadLogo(event: Event) { const input = event.target as HTMLInputElement, file = input.files?.[0]; if (!file) { logo.value = undefined; return; } if (file.size > 200_000 || !['image/png','image/jpeg'].includes(file.type)) { error.value = 'Scegli un logo PNG/JPEG inferiore a 200 KB'; input.value = ''; return; } const reader = new FileReader(); reader.onload = () => { logo.value = String(reader.result); }; reader.readAsDataURL(file); }
+let previousFocus: HTMLElement | null = null;
+watch(openForm, async open => {
+  if (open) { previousFocus = document.activeElement as HTMLElement; authorized.value = false; await nextTick(); document.getElementById('target')?.focus(); }
+  else previousFocus?.focus();
+});
+function handleKeyboard(event: KeyboardEvent) {
+  if (!openForm.value) return;
+  if (event.key === 'Escape') { openForm.value = false; return; }
+  if (event.key !== 'Tab') return;
+  const fields = [...document.querySelectorAll<HTMLElement>('.modal button:not([disabled]), .modal input:not([disabled]), .modal select:not([disabled])')];
+  const first = fields[0], last = fields[fields.length - 1];
+  if (event.shiftKey && document.activeElement === first) { last?.focus(); event.preventDefault(); }
+  else if (!event.shiftKey && document.activeElement === last) { first?.focus(); event.preventDefault(); }
+}
 onMounted(async () => {
+  document.addEventListener('keydown', handleKeyboard);
   try { if (isPublic) { report.value = await api('/api/share/' + sharedToken); selectedPage.value = report.value?.pages.find(p => p.screenshot) || null; }
     else if (token.value) { await loadReports(); connected.value = true; const id = new URLSearchParams(location.search).get('report'); if (id) await selectReport(id); }
   } catch (err: any) { error.value = err.message; }
   timer = setInterval(async () => { if (polling) return; polling = true; try { if (report.value && !finished.value) { const selectedUrl = selectedPage.value?.url, selectedViewport = selectedPage.value?.viewport; report.value = await api(isPublic ? '/api/share/' + sharedToken : '/api/reports/' + report.value.id); selectedPage.value = report.value?.pages.find(p => p.url === selectedUrl && p.viewport === selectedViewport) || report.value?.pages.find(p => p.screenshot) || null; } else if (!report.value && connected.value) await loadReports(); } catch (err: any) { if (err.name !== 'AbortError') error.value = err.message; } finally { polling = false; } }, 4000);
 });
-onBeforeUnmount(() => { if (timer) clearInterval(timer); controller.abort(); });
+onBeforeUnmount(() => { document.removeEventListener('keydown', handleKeyboard); if (timer) clearInterval(timer); controller.abort(); });
 </script>
