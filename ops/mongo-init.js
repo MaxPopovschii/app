@@ -11,15 +11,12 @@ try {
   if (e.code !== 94) throw e;
   needsInitialization = true;
 }
-if (needsInitialization)
-  assert.commandWorked(
-    admin.runCommand({
-      replSetInitiate: {
-        _id: "rs0",
-        members: [{ _id: 0, host: "mongo:27017" }],
-      },
-    }),
-  );
+if (needsInitialization) {
+  const result = admin.runCommand({
+    replSetInitiate: { _id: "rs0", members: [{ _id: 0, host: "mongo:27017" }] },
+  });
+  if (!result.ok) throw new Error("Replica set initialization failed");
+}
 let primary = false;
 for (let n = 0; n < 60; n++) {
   if (admin.runCommand({ hello: 1 }).isWritablePrimary) {
