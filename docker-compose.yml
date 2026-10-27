@@ -79,7 +79,7 @@ services:
     security_opt: [no-new-privileges:true]
     mem_limit: 512m
     cpus: 1
-    tmpfs: [/tmp:rw, noexec, nosuid, size=32m]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
     environment:
       NODE_ENV: production
       FETCHER_TOKEN_FILE: /run/launchcheck/fetcher_token
@@ -107,7 +107,7 @@ services:
     security_opt: [no-new-privileges:true]
     mem_limit: 1g
     cpus: 2
-    tmpfs: [/tmp:rw, noexec, nosuid, size=32m]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
     ports: ["${BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:8080"]
     environment:
       NODE_ENV: production
@@ -142,7 +142,7 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    tmpfs: [/tmp:rw, noexec, nosuid, size=256m]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=256m"]
     environment:
       NODE_ENV: production
       MONGO_URI_FILE: /run/launchcheck/mongo_uri
