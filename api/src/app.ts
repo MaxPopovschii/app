@@ -131,6 +131,16 @@ export function createApp(options: AppOptions) {
         .send((await options.metrics?.()) || "");
     }),
   );
+  app.get(
+    "/api/status",
+    auth.requireAuth,
+    wrap(async (_req, res) => {
+      const state = await options.readiness?.();
+      res
+        .status(state?.ready ? 200 : 503)
+        .json({ ready: Boolean(state?.ready) });
+    }),
+  );
   app.post("/api/auth/login", wrap(auth.login));
   app.get("/api/auth/session", auth.requireAuth, (_req, res) =>
     res.json({ user: safeUser(identity(res)), csrfToken: identity(res).csrf }),
@@ -219,12 +229,10 @@ export function createApp(options: AppOptions) {
         authorized,
       } = req.body || {};
       if (options.readiness && !(await options.readiness()).ready)
-        return res
-          .status(503)
-          .json({
-            error:
-              "Scansioni temporaneamente non disponibili. Riprova più tardi.",
-          });
+        return res.status(503).json({
+          error:
+            "Scansioni temporaneamente non disponibili. Riprova più tardi.",
+        });
       const account = identity(res);
       let target: URL;
       try {
@@ -422,11 +430,9 @@ export function createApp(options: AppOptions) {
       const doc = await owned(req, res);
       if (!doc) return res.status(404).end();
       if (!isFinished(doc.report.status))
-        return res
-          .status(409)
-          .json({
-            error: "Attendi la fine della scansione prima di eliminarla",
-          });
+        return res.status(409).json({
+          error: "Attendi la fine della scansione prima di eliminarla",
+        });
       await store.requestDeletion(doc.id, identity(res).agency.id);
       await identities.event(
         "report_deleted",

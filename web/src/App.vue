@@ -901,7 +901,7 @@ async function logout() {
 }
 async function checkReady() {
   try {
-    const response = await fetch("/readyz", { signal: controller.signal });
+    const response = await fetch("/api/status", { signal: controller.signal });
     ready.value = response.ok;
   } catch {
     ready.value = false;
