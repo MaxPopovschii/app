@@ -112,7 +112,7 @@ test(
       assert.equal(message.content.toString(), account.id);
       channel.ack(message);
       // Exercise the actual worker and controlled egress without contacting a third-party site.
-      const rejected = stored(report("http://127.0.0.1/", 1), agencyId);
+      const rejected = stored(report("https://launchcheck-test.invalid/", 1), agencyId);
       await UsageModel.deleteMany({ agencyId });
       await mongoStore.reserve(rejected);
       channel.sendToQueue(
