@@ -1,0 +1,13 @@
+{
+  email {$ACME_EMAIL}
+  admin off
+}
+{$DOMAIN} {
+  encode zstd gzip
+  request_body {
+    max_size 400KB
+  }
+  @internal path /metrics /healthz /readyz
+  respond @internal 404
+  reverse_proxy api:8080
+}

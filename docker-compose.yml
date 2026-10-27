@@ -1,63 +1,194 @@
 services:
+  secrets-init:
+    image: alpine:3.22
+    network_mode: none
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    entrypoint: [/bin/sh, /init-secrets.sh]
+    volumes:
+      - ./.secrets:/input:ro
+      - ./ops/init-secrets.sh:/init-secrets.sh:ro
+      - api-secrets:/out/api
+      - worker-secrets:/out/worker
+      - fetcher-secrets:/out/fetcher
+      - mongo-secrets:/out/mongo
+      - rabbit-secrets:/out/rabbit
+      - monitor-secrets:/out/monitor
   mongo:
     image: mongo:7
-    volumes: [mongo-data:/data/db]
+    command:
+      [
+        mongod,
+        --replSet,
+        rs0,
+        --bind_ip_all,
+        --keyFile,
+        /run/launchcheck/mongo_key,
+      ]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/launchcheck/mongo_root_password
+    volumes: [mongo-data-v2:/data/db, mongo-secrets:/run/launchcheck:ro]
     networks: [backend]
+    depends_on:
+      secrets-init: { condition: service_completed_successfully }
     healthcheck:
-      test: [CMD, mongosh, --quiet, --eval, "db.adminCommand('ping')"]
-      interval: 10s
+      test:
+        [
+          CMD,
+          mongosh,
+          --quiet,
+          --eval,
+          "new Mongo(require('fs').readFileSync('/run/launchcheck/mongo_init_uri','utf8').trim()).getDB('admin').runCommand({ping:1}).ok",
+        ]
+      interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 30
     restart: unless-stopped
+  mongo-init:
+    image: mongo:7
+    entrypoint: [mongosh, --nodb, --quiet, /mongo-init.js]
+    volumes:
+      [mongo-secrets:/run/launchcheck:ro, ./ops/mongo-init.js:/mongo-init.js:ro]
+    networks: [backend]
+    depends_on:
+      mongo: { condition: service_healthy }
   rabbit:
     image: rabbitmq:3.13-alpine
-    environment:
-      RABBITMQ_DEFAULT_USER: launchcheck
-      RABBITMQ_DEFAULT_PASS: ${RABBIT_PASSWORD:?Set RABBIT_PASSWORD in .env}
-    volumes: [rabbit-data:/var/lib/rabbitmq]
+    entrypoint: [/bin/sh, /rabbit-entrypoint.sh]
+    volumes:
+      [
+        rabbit-data-v2:/var/lib/rabbitmq,
+        rabbit-secrets:/run/launchcheck:ro,
+        ./ops/rabbit-entrypoint.sh:/rabbit-entrypoint.sh:ro,
+      ]
     networks: [backend]
+    depends_on:
+      secrets-init: { condition: service_completed_successfully }
     healthcheck:
       test: [CMD, rabbitmq-diagnostics, -q, ping]
-      interval: 10s
+      interval: 5s
       timeout: 5s
+      retries: 30
+    restart: unless-stopped
+  fetcher:
+    build: { context: ., target: fetcher }
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    cpus: 1
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
+    environment:
+      NODE_ENV: production
+      FETCHER_TOKEN_FILE: /run/launchcheck/fetcher_token
+    volumes: [fetcher-secrets:/run/launchcheck:ro]
+    networks: [fetch, egress]
+    depends_on:
+      secrets-init: { condition: service_completed_successfully }
+    healthcheck:
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:8081/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
       retries: 10
     restart: unless-stopped
   api:
-    build:
-      context: .
-      target: api
-    ports: ["127.0.0.1:8080:8080"]
+    build: { context: ., target: api }
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    cpus: 2
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
+    ports: ["${BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:8080"]
     environment:
-      MONGO_URI: mongodb://mongo:27017/launchcheck
-      RABBIT_URL: amqp://launchcheck:${RABBIT_PASSWORD}@rabbit:5672
-      ADMIN_TOKEN: ${ADMIN_TOKEN:?Set ADMIN_TOKEN in .env}
-    volumes: [audit-artifacts:/data/artifacts:ro]
+      NODE_ENV: production
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:8080}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      MONGO_URI_FILE: /run/launchcheck/mongo_uri
+      RABBIT_URL_FILE: /run/launchcheck/rabbit_url
+      AUTH_SECRET_FILE: /run/launchcheck/auth_secret
+      METRICS_TOKEN_FILE: /run/launchcheck/metrics_token
+      GLOBAL_CONCURRENCY_LIMIT: ${GLOBAL_CONCURRENCY_LIMIT:-12}
+    volumes:
+      [audit-artifacts-v2:/data/artifacts:ro, api-secrets:/run/launchcheck:ro]
     networks: [backend, frontend]
     depends_on:
-      mongo: { condition: service_healthy }
+      mongo-init: { condition: service_completed_successfully }
       rabbit: { condition: service_healthy }
+    healthcheck:
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
   worker:
-    build:
-      context: .
-      target: worker
+    build: { context: ., target: worker }
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=256m"]
     environment:
-      MONGO_URI: mongodb://mongo:27017/launchcheck
-      RABBIT_URL: amqp://launchcheck:${RABBIT_PASSWORD}@rabbit:5672
-    volumes: [audit-artifacts:/data/artifacts]
-    networks: [backend, egress]
+      NODE_ENV: production
+      MONGO_URI_FILE: /run/launchcheck/mongo_uri
+      RABBIT_URL_FILE: /run/launchcheck/rabbit_url
+      FETCHER_URL: http://fetcher:8081
+      FETCHER_TOKEN_FILE: /run/launchcheck/fetcher_token
+    volumes:
+      [audit-artifacts-v2:/data/artifacts, worker-secrets:/run/launchcheck:ro]
+    networks: [backend, fetch]
     shm_size: 256mb
     mem_limit: 2g
     cpus: 2
     depends_on:
-      mongo: { condition: service_healthy }
+      mongo-init: { condition: service_completed_successfully }
       rabbit: { condition: service_healthy }
+      fetcher: { condition: service_healthy }
     restart: unless-stopped
+  backup-files:
+    image: node:22-bookworm-slim
+    profiles: [ops]
+    user: "1000:1000"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    entrypoint: [tar]
+    volumes: [audit-artifacts-v2:/data/artifacts]
 networks:
-  backend: { internal: true }
+  backend:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+      com.docker.network.bridge.gateway_mode_ipv6: isolated
+  fetch:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+      com.docker.network.bridge.gateway_mode_ipv6: isolated
   egress: {}
   frontend: {}
 volumes:
-  mongo-data:
-  rabbit-data:
-  audit-artifacts:
+  mongo-data-v2:
+  rabbit-data-v2:
+  audit-artifacts-v2:
+  api-secrets:
+  worker-secrets:
+  fetcher-secrets:
+  mongo-secrets:
+  rabbit-secrets:
+  monitor-secrets:

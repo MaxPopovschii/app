@@ -47,6 +47,8 @@ export interface AuditReport {
   resolvedSinceBaseline: Finding[];
   notes: string[];
   error?: string;
+  retentionUntil?: string;
+  shareExpiresAt?: string;
 }
 export const VIEWPORTS = [
   { name: "desktop" as const, width: 1440, height: 900 },

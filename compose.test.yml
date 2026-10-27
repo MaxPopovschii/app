@@ -1,0 +1,15 @@
+services:
+  test:
+    build: { context: ., target: test }
+    environment:
+      NODE_ENV: test
+      INTEGRATION_TESTS: "1"
+      MONGO_URI_FILE: /run/launchcheck/mongo_uri
+      RABBIT_URL_FILE: /run/launchcheck/rabbit_url
+      FETCHER_TOKEN_FILE: /run/launchcheck/fetcher_token
+    volumes: [worker-secrets:/run/launchcheck:ro]
+    networks: [backend, fetch]
+    depends_on:
+      mongo-init: { condition: service_completed_successfully }
+      rabbit: { condition: service_healthy }
+      fetcher: { condition: service_healthy }

@@ -9,3 +9,7 @@ test-results
 coverage
 
 **/.env*
+
+.secrets/
+backups/
+.restore/

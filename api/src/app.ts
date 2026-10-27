@@ -2,18 +2,18 @@ import express, { Request, Response, NextFunction } from "express";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import path from "node:path";
-import {
-  randomBytes,
-  randomUUID,
-  createHash,
-  timingSafeEqual,
-} from "node:crypto";
+import { randomBytes, randomUUID, createHash } from "node:crypto";
 import {
   AuditReport,
   ReportStore,
   normalizeTarget,
   isFinished,
+  IdentityStore,
+  mongoIdentity,
+  QuotaError,
+  StoredAudit,
 } from "@launchcheck/shared";
+import { authLayer, Identity, safeUser } from "./auth";
 export const hashToken = (token: string) =>
   createHash("sha256").update(token).digest("hex");
 const wrap =
@@ -23,17 +23,57 @@ const wrap =
   };
 export interface AppOptions {
   store: ReportStore;
-  adminToken: string;
+  identities?: IdentityStore;
+  authSecret: string;
+  secureCookies: boolean;
+  publicOrigin: string;
+  trustProxyHops?: 0 | 1;
+  readiness?: () => Promise<{
+    ready: boolean;
+    checks: Record<string, boolean>;
+  }>;
+  metrics?: () => Promise<string>;
+  metricsToken?: string;
   enqueue: (id: string) => Promise<void>;
   artifactDir: string;
   webDir?: string;
 }
 export function createApp(options: AppOptions) {
-  if (options.adminToken.length < 32)
-    throw new Error("ADMIN_TOKEN deve contenere almeno 32 caratteri");
+  const identities = options.identities || mongoIdentity;
+  const auth = authLayer({
+    identities,
+    secret: options.authSecret,
+    secureCookies: options.secureCookies,
+    get publicOrigin() {
+      return options.publicOrigin;
+    },
+  });
+  const identity = (res: Response) => res.locals.identity as Identity;
+  const owned = (req: Request, res: Response) =>
+    store.get(req.params.id, identity(res).agency.id);
+  const editor = auth.requireEditor;
   const { store } = options;
   const app = express();
   app.disable("x-powered-by");
+  app.set("trust proxy", options.trustProxyHops || false);
+  app.use((req, res, next) => {
+    const id = randomUUID(),
+      started = Date.now();
+    res.set("X-Request-ID", id);
+    res.on("finish", () =>
+      console.log(
+        JSON.stringify({
+          event: "request",
+          requestId: id,
+          method: req.method,
+          route: req.route?.path || "unmatched",
+          status: res.statusCode,
+          durationMs: Date.now() - started,
+        }),
+      ),
+    );
+    next();
+  });
   app.use(
     helmet({
       contentSecurityPolicy: {
@@ -67,20 +107,54 @@ export function createApp(options: AppOptions) {
       legacyHeaders: false,
     }),
   );
-  const authorize = (req: Request, res: Response, next: NextFunction) => {
-    const token = req.headers.authorization?.replace(/^Bearer /, "") || "";
-    if (
-      !timingSafeEqual(
-        Buffer.from(hashToken(token)),
-        Buffer.from(hashToken(options.adminToken)),
+  app.get(
+    "/readyz",
+    wrap(async (_req, res) => {
+      const state = (await options.readiness?.()) || {
+        ready: false,
+        checks: { configuration: false },
+      };
+      res.status(state.ready ? 200 : 503).json(state);
+    }),
+  );
+  app.get(
+    "/metrics",
+    wrap(async (req, res) => {
+      if (
+        !options.metricsToken ||
+        hashToken(req.get("Authorization") || "") !==
+          hashToken("Bearer " + options.metricsToken)
       )
-    )
-      return res.status(401).json({ error: "Accesso agenzia richiesto" });
-    next();
-  };
-  const publicReport = (report: AuditReport) => ({
-    ...report,
-    error: report.error
+        return res.status(401).end();
+      res
+        .type("text/plain; version=0.0.4")
+        .send((await options.metrics?.()) || "");
+    }),
+  );
+  app.get(
+    "/api/status",
+    auth.requireAuth,
+    wrap(async (_req, res) => {
+      const state = await options.readiness?.();
+      res
+        .status(state?.ready ? 200 : 503)
+        .json({ ready: Boolean(state?.ready) });
+    }),
+  );
+  app.post("/api/auth/login", wrap(auth.login));
+  app.get("/api/auth/session", auth.requireAuth, (_req, res) =>
+    res.json({ user: safeUser(identity(res)), csrfToken: identity(res).csrf }),
+  );
+  app.post("/api/auth/logout", auth.requireAuth, wrap(auth.logout));
+  app.post("/api/auth/password", auth.requireAuth, wrap(auth.changePassword));
+  const dto = (doc: StoredAudit) => ({
+    ...doc.report,
+    retentionUntil: new Date(doc.expiresAt).toISOString(),
+    shareExpiresAt: new Date(doc.shareExpiresAt).toISOString(),
+  });
+  const publicReport = (doc: StoredAudit) => ({
+    ...dto(doc),
+    error: doc.report.error
       ? "Scansione non completata. Contatta l’agenzia."
       : undefined,
   });
@@ -107,7 +181,7 @@ export function createApp(options: AppOptions) {
         return res
           .status(404)
           .json({ error: "Report non trovato o link revocato" });
-      res.json(publicReport(doc.report));
+      res.json(publicReport(doc));
     }),
   );
   app.get(
@@ -118,12 +192,12 @@ export function createApp(options: AppOptions) {
       await asset(res, doc.report, req.params.file);
     }),
   );
-  app.use("/api/reports", authorize);
+  app.use("/api/reports", auth.requireAuth);
   app.get(
     "/api/reports",
     wrap(async (_req, res) => {
       res.json(
-        (await store.list()).map(
+        (await store.list(identity(res).agency.id)).map(
           ({ pages, findings, resolvedSinceBaseline, logo, ...report }) => ({
             ...report,
             findingCount: findings.length,
@@ -137,6 +211,7 @@ export function createApp(options: AppOptions) {
   );
   app.post(
     "/api/reports",
+    editor,
     rateLimit({
       windowMs: 3_600_000,
       limit: 10,
@@ -153,6 +228,12 @@ export function createApp(options: AppOptions) {
         baselineId,
         authorized,
       } = req.body || {};
+      if (options.readiness && !(await options.readiness()).ready)
+        return res.status(503).json({
+          error:
+            "Scansioni temporaneamente non disponibili. Riprova più tardi.",
+        });
+      const account = identity(res);
       let target: URL;
       try {
         target = normalizeTarget(typeof url === "string" ? url : "");
@@ -160,24 +241,20 @@ export function createApp(options: AppOptions) {
         return res.status(400).json({ error: err.message });
       }
       if (authorized !== true)
-        return res
-          .status(400)
-          .json({
-            error: "Conferma di essere autorizzato a verificare il sito",
-          });
+        return res.status(400).json({
+          error: "Conferma di essere autorizzato a verificare il sito",
+        });
       if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 10)
         return res.status(400).json({ error: "Scegli da 1 a 10 pagine" });
       if (
-        ![agency, client].every(
+        ![client].every(
           (v) =>
             typeof v === "string" && v.trim().length > 0 && v.length <= 100,
         )
       )
-        return res
-          .status(400)
-          .json({
-            error: "Agenzia e cliente sono obbligatori (massimo 100 caratteri)",
-          });
+        return res.status(400).json({
+          error: "Agenzia e cliente sono obbligatori (massimo 100 caratteri)",
+        });
       if (
         logo !== undefined &&
         (typeof logo !== "string" ||
@@ -201,32 +278,25 @@ export function createApp(options: AppOptions) {
       if (baselineId) {
         if (typeof baselineId !== "string")
           return res.status(400).json({ error: "Baseline non valida" });
-        const baseline = (await store.get(baselineId))?.report;
+        const baseline = (await store.get(baselineId, account.agency.id))
+          ?.report;
         if (
           !baseline ||
           !["complete", "partial"].includes(baseline.status) ||
           new URL(baseline.url).origin !== target.origin
         )
-          return res
-            .status(400)
-            .json({
-              error:
-                "La baseline deve essere una scansione conclusa dello stesso sito",
-            });
-      }
-      if ((await store.list()).filter((r) => !isFinished(r.status)).length >= 3)
-        return res
-          .status(429)
-          .json({
-            error: "Tre scansioni sono già in coda. Attendi il completamento.",
+          return res.status(400).json({
+            error:
+              "La baseline deve essere una scansione conclusa dello stesso sito",
           });
+      }
       const id = randomUUID(),
         token = randomBytes(32).toString("base64url"),
         now = new Date().toISOString();
       const report: AuditReport = {
         id,
         url: target.href,
-        agency: agency.trim(),
+        agency: account.agency.name,
         client: client.trim(),
         logo,
         status: "queued",
@@ -241,14 +311,41 @@ export function createApp(options: AppOptions) {
         resolvedSinceBaseline: [],
         notes: [],
       };
-      await store.create({ id, shareHash: hashToken(token), report });
+      try {
+        await store.reserve({
+          id,
+          agencyId: account.agency.id,
+          createdBy: account.user.id,
+          shareHash: hashToken(token),
+          shareExpiresAt: new Date(
+            Date.now() + account.agency.shareDays * 86400_000,
+          ),
+          expiresAt: new Date(
+            Date.now() + account.agency.retentionDays * 86400_000,
+          ),
+          quotaReleased: false,
+          report,
+        });
+      } catch (err) {
+        if (err instanceof QuotaError)
+          return res.status(429).json({ error: err.message });
+        throw err;
+      }
+      await identities.event(
+        "report_created",
+        account.agency.id,
+        account.user.id,
+        id,
+      );
       try {
         await options.enqueue(id);
       } catch {
-        report.status = "failed";
-        report.error = "Coda temporaneamente non disponibile";
-        await store.update(id, { report });
-        return res.status(503).json({ error: report.error });
+        await identities.event(
+          "enqueue_deferred",
+          account.agency.id,
+          account.user.id,
+          id,
+        );
       }
       res.status(202).json({ id, sharePath: "/report/" + token });
     }),
@@ -256,33 +353,40 @@ export function createApp(options: AppOptions) {
   app.get(
     "/api/reports/:id",
     wrap(async (req, res) => {
-      const doc = await store.get(req.params.id);
+      const doc = await owned(req, res);
       if (!doc) return res.status(404).json({ error: "Report non trovato" });
-      res.json(doc.report);
+      res.json(dto(doc));
     }),
   );
   app.get(
     "/api/reports/:id/assets/:file",
     wrap(async (req, res) => {
-      const doc = await store.get(req.params.id);
+      const doc = await owned(req, res);
       if (!doc) return res.status(404).end();
       await asset(res, doc.report, req.params.file);
     }),
   );
   app.post(
     "/api/reports/:id/share",
+    editor,
     wrap(async (req, res) => {
-      if (!(await store.get(req.params.id))) return res.status(404).end();
+      if (!(await owned(req, res))) return res.status(404).end();
       const token = randomBytes(32).toString("base64url");
-      await store.update(req.params.id, { shareHash: hashToken(token) });
+      await store.update(req.params.id, identity(res).agency.id, {
+        shareHash: hashToken(token),
+        shareExpiresAt: new Date(
+          Date.now() + identity(res).agency.shareDays * 86400_000,
+        ),
+      });
       res.json({ sharePath: "/report/" + token });
     }),
   );
   app.delete(
     "/api/reports/:id/share",
+    editor,
     wrap(async (req, res) => {
-      if (!(await store.get(req.params.id))) return res.status(404).end();
-      await store.update(req.params.id, {
+      if (!(await owned(req, res))) return res.status(404).end();
+      await store.update(req.params.id, identity(res).agency.id, {
         shareHash: hashToken(randomBytes(32).toString("base64url")),
       });
       res.status(204).end();
@@ -290,8 +394,9 @@ export function createApp(options: AppOptions) {
   );
   app.patch(
     "/api/reports/:id/findings/:findingId",
+    editor,
     wrap(async (req, res) => {
-      const doc = await store.get(req.params.id);
+      const doc = await owned(req, res);
       if (!doc) return res.status(404).end();
       if (!isFinished(doc.report.status))
         return res
@@ -303,10 +408,39 @@ export function createApp(options: AppOptions) {
         (f) => f.id === req.params.findingId,
       );
       if (!finding) return res.status(404).end();
-      finding.status = req.body?.status;
-      doc.report.updatedAt = new Date().toISOString();
-      await store.update(doc.id, { report: doc.report });
-      res.json(doc.report);
+      await store.triage(
+        doc.id,
+        identity(res).agency.id,
+        finding.id,
+        req.body.status,
+      );
+      await identities.event(
+        "finding_updated",
+        identity(res).agency.id,
+        identity(res).user.id,
+        doc.id,
+      );
+      res.json(dto((await owned(req, res))!));
+    }),
+  );
+  app.delete(
+    "/api/reports/:id",
+    editor,
+    wrap(async (req, res) => {
+      const doc = await owned(req, res);
+      if (!doc) return res.status(404).end();
+      if (!isFinished(doc.report.status))
+        return res.status(409).json({
+          error: "Attendi la fine della scansione prima di eliminarla",
+        });
+      await store.requestDeletion(doc.id, identity(res).agency.id);
+      await identities.event(
+        "report_deleted",
+        identity(res).agency.id,
+        identity(res).user.id,
+        doc.id,
+      );
+      res.status(202).json({ status: "deletion_pending" });
     }),
   );
   app.use("/api", (_req, res) =>
@@ -322,13 +456,11 @@ export function createApp(options: AppOptions) {
     const badBody =
       err.type === "entity.too.large" || err instanceof SyntaxError;
     console.error("API failure:", err.name);
-    res
-      .status(badBody ? 400 : 500)
-      .json({
-        error: badBody
-          ? "Richiesta non valida o troppo grande"
-          : "Errore interno. Riprova.",
-      });
+    res.status(badBody ? 400 : 500).json({
+      error: badBody
+        ? "Richiesta non valida o troppo grande"
+        : "Errore interno. Riprova.",
+    });
   });
   return app;
 }
