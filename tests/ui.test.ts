@@ -31,8 +31,8 @@ test('agency creates a report, sees real evidence, shares read-only and revokes 
     await page.getByRole('checkbox').check();
     await page.getByRole('button',{ name:'Avvia la verifica →' }).click();
     await page.getByRole('button',{ name:'Stampa / PDF' }).waitFor({ timeout: 40_000 });
-    assert.ok(await page.getByText('Immagine non caricata',{ exact:true }).count() > 0);
-    await page.getByRole('button',{ name:'Contenuto oltre la larghezza dello schermo ↗' }).first().click();
+    await page.getByRole('button',{ name:/Immagine non caricata/ }).first().waitFor();
+    await page.getByRole('button',{ name:/Contenuto oltre la larghezza dello schermo/ }).first().click();
     await page.locator('.evidence-panel img').first().waitFor();
     await mkdir('test-results',{ recursive:true });
     await page.screenshot({ path:'test-results/report-desktop.png', fullPage:true });
@@ -47,6 +47,8 @@ test('agency creates a report, sees real evidence, shares read-only and revokes 
     const overflow = await sharedPage.evaluate(() => document.documentElement.scrollWidth > innerWidth); assert.equal(overflow,false);
     await sharedPage.screenshot({ path:'test-results/report-mobile.png', fullPage:true });
     await sharedPage.emulateMedia({ media:'print' });
+    await sharedPage.locator('.print-only img').first().waitFor();
+    await sharedPage.waitForFunction(() => Array.from(document.images).every(img => img.complete));
     await sharedPage.pdf({ path:'test-results/report-print.pdf', format:'A4', printBackground:true });
     await page.getByRole('button',{ name:'Revoca link' }).click();
     const response = await sharedPage.request.get(shareHref!.replace('/report/','/api/share/')); assert.equal(response.status(),404);

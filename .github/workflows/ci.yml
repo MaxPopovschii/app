@@ -12,6 +12,9 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-24.04
+    container: mcr.microsoft.com/playwright:v1.57.0-noble
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
     services:
       mongo:
         image: mongo:7
@@ -32,12 +35,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: npx playwright install --with-deps chromium
       - run: npm test
         env:
           INTEGRATION_TESTS: '1'
-          MONGO_URI: mongodb://127.0.0.1:27017/launchcheck_ci
-          RABBIT_URL: amqp://test:test@127.0.0.1:5672
+          MONGO_URI: mongodb://mongo:27017/launchcheck_ci
+          RABBIT_URL: amqp://test:test@rabbit:5672
       - run: npm audit --omit=dev --audit-level=high
       - uses: actions/upload-artifact@v4
         if: always()

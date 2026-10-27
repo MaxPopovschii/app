@@ -51,7 +51,7 @@ npx playwright install chromium
 npm test
 ```
 
-`npm test` esegue test di API, isolamento dei link, URL/SSRF, confronto baseline, browser reale su siti fixture e interfaccia fino alla generazione di un PDF. I test browser richiedono un ambiente in grado di avviare Chromium. Su CI vengono installate anche le librerie di sistema con `npx playwright install --with-deps chromium`.
+`npm test` esegue test di API, isolamento dei link, URL/SSRF, confronto baseline, browser reale su siti fixture e interfaccia fino alla generazione di un PDF. I test browser richiedono un ambiente in grado di avviare Chromium. La CI esegue i test nell’immagine Playwright con browser e librerie di sistema già installati. Su Linux locale è possibile installare le librerie con `npx playwright install --with-deps chromium`.
 
 Per i test di persistenza e coda aggiungere MongoDB/RabbitMQ e impostare:
 
