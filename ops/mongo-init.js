@@ -3,13 +3,15 @@ const connection = new Mongo(
   fs.readFileSync("/run/launchcheck/mongo_init_uri", "utf8").trim(),
 );
 const admin = connection.getDB("admin");
+let needsInitialization = false;
 try {
-  admin.runCommand({ replSetGetStatus: 1 });
+  const status = admin.runCommand({ replSetGetStatus: 1 });
+  needsInitialization = !status.ok && status.code === 94;
 } catch (e) {
   if (e.code !== 94) throw e;
+  needsInitialization = true;
 }
-const status = admin.runCommand({ replSetGetStatus: 1 });
-if (!status.ok && status.code === 94)
+if (needsInitialization)
   assert.commandWorked(
     admin.runCommand({
       replSetInitiate: {
